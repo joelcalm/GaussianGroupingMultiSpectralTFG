@@ -1,0 +1,29 @@
+# Data and outputs
+data/
+output/
+media/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build artifacts (submodules)
+submodules/diff-gaussian-rasterization/build/
+submodules/diff-gaussian-rasterization/*.egg-info/
+submodules/simple-knn/build/
+submodules/simple-knn/*.egg-info/
+
+# DEVA / Grounded-SAM build artifacts
+Tracking-Anything-with-DEVA/Grounded-Segment-Anything/GroundingDINO/*.egg-info/
+Tracking-Anything-with-DEVA/Grounded-Segment-Anything/segment_anything/*.egg-info/
+Tracking-Anything-with-DEVA/example/
+
+# Model checkpoints / weights
+Tracking-Anything-with-DEVA/saves/*.pth
+Tracking-Anything-with-DEVA/saves/*.pt
+lama/models/lpips_models/*.pth
+
+# Misc
+*.log
+.DS_Store
