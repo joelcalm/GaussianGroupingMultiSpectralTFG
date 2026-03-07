@@ -15,11 +15,23 @@ from PIL import Image
 import torch
 import torchvision.transforms.functional as tf
 from utils.loss_utils import ssim
-from lpipsPyTorch import lpips
+import lpips as lpips_module
 import json
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
+
+_lpips_fn = None
+
+def _get_lpips_fn():
+    global _lpips_fn
+    if _lpips_fn is None:
+        _lpips_fn = lpips_module.LPIPS(net='vgg').cuda()
+    return _lpips_fn
+
+def compute_lpips(img1, img2):
+    fn = _get_lpips_fn()
+    return fn(img1 * 2 - 1, img2 * 2 - 1).item()
 
 def readImages(renders_dir, gt_dir):
     renders = []
@@ -71,7 +83,7 @@ def evaluate(model_paths):
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
                     ssims.append(ssim(renders[idx], gts[idx]))
                     psnrs.append(psnr(renders[idx], gts[idx]))
-                    lpipss.append(lpips(renders[idx], gts[idx], net_type='vgg'))
+                    lpipss.append(compute_lpips(renders[idx], gts[idx]))
 
                 print("  SSIM : {:>12.7f}".format(torch.tensor(ssims).mean(), ".5"))
                 print("  PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean(), ".5"))

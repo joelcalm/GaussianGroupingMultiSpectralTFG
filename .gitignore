@@ -2,6 +2,7 @@
 data/
 output/
 media/
+result/
 
 # Python cache
 __pycache__/
