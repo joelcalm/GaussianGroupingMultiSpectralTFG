@@ -3,6 +3,7 @@ data/
 output/
 media/
 result/
+tests/
 
 # Python cache
 __pycache__/
