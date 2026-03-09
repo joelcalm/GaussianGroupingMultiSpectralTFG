@@ -46,6 +46,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
+    mem_log = []  # Memory tracking
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
@@ -105,6 +106,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss.backward()
         iter_end.record()
+
+        # Memory tracking every 100 iterations
+        if iteration % 100 == 0 or iteration == 1:
+            torch.cuda.synchronize()
+            alloc = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            n_pts = gaussians.get_xyz.shape[0]
+            mem_log.append((iteration, n_pts, alloc, reserved))
+            tqdm.write(f"[MEM iter={iteration}] points={n_pts}, allocated={alloc:.3f}GiB, reserved={reserved:.3f}GiB")
 
         with torch.no_grad():
             # Progress bar
@@ -252,7 +262,13 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.use_wandb)
+    try:
+        training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.use_wandb)
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print(f"\n\n=== OOM ERROR at runtime ===\n{e}\n")
+        else:
+            raise
 
     # All done
     print("\nTraining complete.")
