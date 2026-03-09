@@ -25,11 +25,15 @@ import json
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb):
     first_iter = 0
     prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
+    num_objects = dataset.num_objects if hasattr(dataset, 'num_objects') else 16
+    gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     num_classes = dataset.num_classes
     print("Num classes: ",num_classes)
+    print("Num objects (embedding dim): ", num_objects)
+    if hasattr(dataset, 'max_num_points') and dataset.max_num_points > 0:
+        print("Max num points: ", dataset.max_num_points)
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
@@ -138,9 +142,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
+                max_pts = dataset.max_num_points if hasattr(dataset, 'max_num_points') else 0
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    if max_pts > 0 and gaussians.get_xyz.shape[0] >= max_pts:
+                        tqdm.write(f"[DENSIFY] Skipping densification: {gaussians.get_xyz.shape[0]} points >= max_num_points={max_pts}")
+                    else:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -243,6 +251,8 @@ if __name__ == "__main__":
 
     args.densify_until_iter = config.get("densify_until_iter", 15000)
     args.num_classes = config.get("num_classes", 200)
+    args.num_objects = config.get("num_objects", 16)
+    args.max_num_points = config.get("max_num_points", 0)
     args.reg3d_interval = config.get("reg3d_interval", 2)
     args.reg3d_k = config.get("reg3d_k", 5)
     args.reg3d_lambda_val = config.get("reg3d_lambda_val", 2)

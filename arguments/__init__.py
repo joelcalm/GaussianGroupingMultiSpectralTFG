@@ -56,6 +56,8 @@ class ModelParams(ParamGroup):
         self.train_split = False
         self._object_path = "object_mask"
         self.num_classes = 200
+        self.num_objects = 16
+        self.max_num_points = 0
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
