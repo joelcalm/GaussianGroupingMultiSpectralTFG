@@ -1,7 +1,6 @@
 {
     "densify_until_iter": 10000,
     "num_classes": 256,
-    "num_objects": 8,
     "max_num_points": 800000,
     "reg3d_interval": 5,
     "reg3d_k": 5,
