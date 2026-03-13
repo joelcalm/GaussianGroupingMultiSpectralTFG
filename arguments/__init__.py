@@ -43,7 +43,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 3
+        self.sh_degree = 0
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -98,6 +98,7 @@ class OptimizationParams(ParamGroup):
         self.reg3d_lambda_val = 2
         self.reg3d_max_points = 300000
         self.reg3d_sample_size = 1000
+        self.color_decoder_lr = 0.001
 
         super().__init__(parser, "Optimization Parameters")
 

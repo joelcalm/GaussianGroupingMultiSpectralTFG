@@ -233,6 +233,9 @@ class GaussianModel:
         hook_scaling = self._scaling.register_hook(mask_hook2)
         hook_rotation = self._rotation.register_hook(mask_hook2)
 
+        if self.use_color_embed:
+            hook_color_emb = self._color_embedding.register_hook(mask_hook2)
+
         self._objects_dc.requires_grad = False
 
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
@@ -249,6 +252,9 @@ class GaussianModel:
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._objects_dc], 'lr': training_args.feature_lr, "name": "obj_dc"},
         ]
+
+        if self.use_color_embed:
+            l.append({'params': [self._color_embedding], 'lr': training_args.feature_lr, "name": "color_emb"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
@@ -278,6 +284,10 @@ class GaussianModel:
         self._scaling = nn.Parameter(set_requires_grad(scaling_sub, False))
         self._rotation = nn.Parameter(set_requires_grad(rotation_sub, False))
         self._objects_dc = nn.Parameter(set_requires_grad(objects_dc_sub, False))
+
+        if self.use_color_embed:
+            color_emb_sub = self._color_embedding[mask3d].detach()
+            self._color_embedding = nn.Parameter(set_requires_grad(color_emb_sub, False))
 
 
     def inpaint_setup(self, training_args, mask3d):
@@ -323,7 +333,12 @@ class GaussianModel:
                 # Convert back to tensor
                 new_features[key] = torch.tensor(new_points_np, device=feature.device, dtype=feature.dtype)
             
-            return new_features['xyz'], new_features['features_dc'], new_features['scaling'], new_features['objects_dc'], new_features['features_rest'], new_features['opacity'], new_features['rotation']
+            result = [new_features['xyz'], new_features['features_dc'], new_features['scaling'],
+                      new_features['objects_dc'], new_features['features_rest'], new_features['opacity'],
+                      new_features['rotation']]
+            if 'color_embedding' in new_features:
+                result.append(new_features['color_embedding'])
+            return tuple(result)
         
         mask3d = ~mask3d.bool().squeeze()
         mask_xyz_values = self._xyz[~mask3d]
@@ -348,9 +363,15 @@ class GaussianModel:
             'rotation': rotation_sub,
         }
 
+        if self.use_color_embed:
+            color_emb_sub = self._color_embedding[mask3d].detach()
+            sub_features['color_embedding'] = color_emb_sub
+
         num_new_points = len(mask_xyz_values)
         with torch.no_grad():
-            new_xyz, new_features_dc, new_scaling, new_objects_dc, new_features_rest, new_opacity, new_rotation = initialize_new_features(sub_features, num_new_points, mask_xyz_values)
+            init_result = initialize_new_features(sub_features, num_new_points, mask_xyz_values)
+            new_xyz, new_features_dc, new_scaling, new_objects_dc, new_features_rest, new_opacity, new_rotation = init_result[:7]
+            new_color_embedding = init_result[7] if len(init_result) > 7 else None
 
 
         def set_requires_grad(tensor, requires_grad):
@@ -366,6 +387,9 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.cat([set_requires_grad(rotation_sub, False), set_requires_grad(new_rotation, True)]))
         self._objects_dc = nn.Parameter(torch.cat([set_requires_grad(objects_dc_sub, False), set_requires_grad(new_objects_dc, True)]))
 
+        if self.use_color_embed and new_color_embedding is not None:
+            self._color_embedding = nn.Parameter(torch.cat([set_requires_grad(color_emb_sub, False), set_requires_grad(new_color_embedding, True)]))
+
         # for optimize
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.percent_dense = training_args.percent_dense
@@ -380,8 +404,11 @@ class GaussianModel:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
-            {'params': [self._objects_dc], 'lr': training_args.feature_lr, "name": "obj_dc"}  # Assuming there's a learning rate for objects_dc in training_args
+            {'params': [self._objects_dc], 'lr': training_args.feature_lr, "name": "obj_dc"},
         ]
+
+        if self.use_color_embed:
+            l.append({'params': [self._color_embedding], 'lr': training_args.feature_lr, "name": "color_emb"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 

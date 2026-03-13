@@ -51,7 +51,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     if use_color_embed:
         color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
         color_decoder.cuda()
-        color_decoder_optimizer = torch.optim.Adam(color_decoder.parameters(), lr=1e-3)
+        color_decoder_lr = opt.color_decoder_lr if hasattr(opt, 'color_decoder_lr') else 1e-3
+        color_decoder_optimizer = torch.optim.Adam(color_decoder.parameters(), lr=color_decoder_lr)
 
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -281,6 +282,7 @@ if __name__ == "__main__":
     args.reg3d_sample_size = config.get("reg3d_sample_size", 1000)
     args.color_embed_dim = config.get("color_embed_dim", 16)
     args.use_color_embed = config.get("use_color_embed", False)
+    args.color_decoder_lr = config.get("color_decoder_lr", 0.001)
     
     print("Optimizing " + args.model_path)
 
