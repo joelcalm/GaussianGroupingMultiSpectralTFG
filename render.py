@@ -22,6 +22,7 @@ from PIL import Image
 import colorsys
 import cv2
 from sklearn.decomposition import PCA
+from utils.color_decoder import ColorDecoder
 
 def feature_to_rgb(features):
     # Input features shape: (16, H, W)
@@ -73,7 +74,7 @@ def visualize_obj(objects):
     return rgb_mask
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier, color_decoder=None):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     colormask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_feature16")
@@ -86,7 +87,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(pred_obj_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        results = render(view, gaussians, pipeline, background)
+        results = render(view, gaussians, pipeline, background, color_decoder=color_decoder)
         rendering = results["render"]
         rendering_obj = results["render_object"]
         
@@ -131,7 +132,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
     with torch.no_grad():
-        gaussians = GaussianModel(dataset.sh_degree)
+        use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
+        color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+        gaussians = GaussianModel(dataset.sh_degree, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         num_classes = dataset.num_classes
@@ -141,14 +144,24 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         classifier.cuda()
         classifier.load_state_dict(torch.load(os.path.join(dataset.model_path,"point_cloud","iteration_"+str(scene.loaded_iter),"classifier.pth")))
 
+        # Load color decoder if using color embedding mode
+        color_decoder = None
+        if use_color_embed:
+            color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
+            color_decoder.cuda()
+            decoder_path = os.path.join(dataset.model_path,"point_cloud","iteration_"+str(scene.loaded_iter),"color_decoder.pth")
+            if os.path.exists(decoder_path):
+                color_decoder.load_state_dict(torch.load(decoder_path))
+            color_decoder.eval()
+
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, classifier)
+             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, classifier, color_decoder)
 
         if (not skip_test) and (len(scene.getTestCameras()) > 0):
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, classifier)
+             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, classifier, color_decoder)
 
 if __name__ == "__main__":
     # Set up command line argument parser

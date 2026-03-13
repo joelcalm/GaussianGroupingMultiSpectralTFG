@@ -19,6 +19,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from utils.color_decoder import ColorDecoder
 import wandb
 import json
 
@@ -26,18 +27,32 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     prepare_output_and_logger(dataset)
     num_objects = dataset.num_objects if hasattr(dataset, 'num_objects') else 16
-    gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects)
+    use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
+    color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+    gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     num_classes = dataset.num_classes
     print("Num classes: ",num_classes)
     print("Num objects (embedding dim): ", num_objects)
+    print("Use color embedding: ", use_color_embed)
+    if use_color_embed:
+        print("Color embedding dim: ", color_embed_dim)
     if hasattr(dataset, 'max_num_points') and dataset.max_num_points > 0:
         print("Max num points: ", dataset.max_num_points)
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
     classifier.cuda()
+
+    # Create color decoder if using color embedding mode
+    color_decoder = None
+    color_decoder_optimizer = None
+    if use_color_embed:
+        color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
+        color_decoder.cuda()
+        color_decoder_optimizer = torch.optim.Adam(color_decoder.parameters(), lr=1e-3)
+
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -61,7 +76,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 net_image_bytes = None
                 custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
+                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer, color_decoder=color_decoder)["render"]
                     net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
                 network_gui.send(net_image_bytes, dataset.source_path)
                 if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
@@ -74,7 +89,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
+        # Skip when using color embeddings (no SH)
+        if iteration % 1000 == 0 and not use_color_embed:
             gaussians.oneupSHdegree()
 
         # Pick a random Camera
@@ -85,7 +101,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, color_decoder=color_decoder)
         image, viewspace_point_tensor, visibility_filter, radii, objects = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["render_object"]
 
         # Object Loss
@@ -130,11 +146,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb)
+            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb, color_decoder=color_decoder)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
                 torch.save(classifier.state_dict(), os.path.join(scene.model_path, "point_cloud/iteration_{}".format(iteration),'classifier.pth'))
+                if use_color_embed and color_decoder is not None:
+                    torch.save(color_decoder.state_dict(), os.path.join(scene.model_path, "point_cloud/iteration_{}".format(iteration),'color_decoder.pth'))
 
             # Densification
             if iteration < opt.densify_until_iter:
@@ -159,6 +177,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.zero_grad(set_to_none = True)
                 cls_optimizer.step()
                 cls_optimizer.zero_grad()
+                if color_decoder_optimizer is not None:
+                    color_decoder_optimizer.step()
+                    color_decoder_optimizer.zero_grad()
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -179,7 +200,7 @@ def prepare_output_and_logger(args):
         cfg_log_f.write(str(Namespace(**vars(args))))
 
 
-def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb):
+def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None):
 
     if use_wandb:
         if loss_obj_3d:
@@ -198,7 +219,7 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, color_decoder=color_decoder)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if use_wandb:
                         if idx < 5:
@@ -258,6 +279,8 @@ if __name__ == "__main__":
     args.reg3d_lambda_val = config.get("reg3d_lambda_val", 2)
     args.reg3d_max_points = config.get("reg3d_max_points", 300000)
     args.reg3d_sample_size = config.get("reg3d_sample_size", 1000)
+    args.color_embed_dim = config.get("color_embed_dim", 16)
+    args.use_color_embed = config.get("use_color_embed", False)
     
     print("Optimizing " + args.model_path)
 

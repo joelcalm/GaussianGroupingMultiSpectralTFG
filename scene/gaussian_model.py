@@ -39,12 +39,15 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int, num_objects : int = 16):
+    def __init__(self, sh_degree : int, num_objects : int = 16, use_color_embed : bool = False, color_embed_dim : int = 16):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
+        self.use_color_embed = use_color_embed
+        self.color_embed_dim = color_embed_dim
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
+        self._color_embedding = torch.empty(0)
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
@@ -59,36 +62,59 @@ class GaussianModel:
         self.setup_functions()
 
     def capture(self):
-        return (
-            self.active_sh_degree,
-            self._xyz,
-            self._features_dc,
-            self._features_rest,
-            self._scaling,
-            self._rotation,
-            self._opacity,
-            self._objects_dc,
-            self.max_radii2D,
-            self.xyz_gradient_accum,
-            self.denom,
-            self.optimizer.state_dict(),
-            self.spatial_lr_scale,
-        )
+        d = {
+            'active_sh_degree': self.active_sh_degree,
+            'xyz': self._xyz,
+            'features_dc': self._features_dc,
+            'features_rest': self._features_rest,
+            'scaling': self._scaling,
+            'rotation': self._rotation,
+            'opacity': self._opacity,
+            'objects_dc': self._objects_dc,
+            'max_radii2D': self.max_radii2D,
+            'xyz_gradient_accum': self.xyz_gradient_accum,
+            'denom': self.denom,
+            'optimizer': self.optimizer.state_dict(),
+            'spatial_lr_scale': self.spatial_lr_scale,
+            'use_color_embed': self.use_color_embed,
+        }
+        if self.use_color_embed:
+            d['color_embedding'] = self._color_embedding
+        return d
     
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
-        self._features_rest,
-        self._scaling, 
-        self._rotation, 
-        self._opacity,
-        self._objects_dc,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
-        denom,
-        opt_dict, 
-        self.spatial_lr_scale) = model_args
+        if isinstance(model_args, dict):
+            self.active_sh_degree = model_args['active_sh_degree']
+            self._xyz = model_args['xyz']
+            self._features_dc = model_args['features_dc']
+            self._features_rest = model_args['features_rest']
+            self._scaling = model_args['scaling']
+            self._rotation = model_args['rotation']
+            self._opacity = model_args['opacity']
+            self._objects_dc = model_args['objects_dc']
+            self.max_radii2D = model_args['max_radii2D']
+            xyz_gradient_accum = model_args['xyz_gradient_accum']
+            denom = model_args['denom']
+            opt_dict = model_args['optimizer']
+            self.spatial_lr_scale = model_args['spatial_lr_scale']
+            self.use_color_embed = model_args.get('use_color_embed', False)
+            if self.use_color_embed and 'color_embedding' in model_args:
+                self._color_embedding = model_args['color_embedding']
+        else:
+            # Legacy tuple format
+            (self.active_sh_degree, 
+            self._xyz, 
+            self._features_dc, 
+            self._features_rest,
+            self._scaling, 
+            self._rotation, 
+            self._opacity,
+            self._objects_dc,
+            self.max_radii2D, 
+            xyz_gradient_accum, 
+            denom,
+            opt_dict, 
+            self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
@@ -111,6 +137,10 @@ class GaussianModel:
         features_dc = self._features_dc
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
+    
+    @property
+    def get_color_embedding(self):
+        return self._color_embedding
     
     @property
     def get_objects(self):
@@ -157,6 +187,12 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self._objects_dc = nn.Parameter(fused_objects.transpose(1, 2).contiguous().requires_grad_(True))
 
+        # Initialize color embedding if using embedding mode
+        if self.use_color_embed:
+            # Initialize with small random values
+            color_emb = torch.randn((fused_point_cloud.shape[0], self.color_embed_dim), device="cuda") * 0.01
+            self._color_embedding = nn.Parameter(color_emb.requires_grad_(True))
+
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -171,6 +207,9 @@ class GaussianModel:
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
             {'params': [self._objects_dc], 'lr': training_args.feature_lr, "name": "obj_dc"},
         ]
+
+        if self.use_color_embed:
+            l.append({'params': [self._color_embedding], 'lr': training_args.feature_lr, "name": "color_emb"})
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
@@ -368,6 +407,9 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         for i in range(self._objects_dc.shape[1]*self._objects_dc.shape[2]):
             l.append('obj_dc_{}'.format(i))
+        if self.use_color_embed:
+            for i in range(self._color_embedding.shape[1]):
+                l.append('color_emb_{}'.format(i))
         return l
 
     def save_ply(self, path):
@@ -382,10 +424,15 @@ class GaussianModel:
         rotation = self._rotation.detach().cpu().numpy()
         obj_dc = self._objects_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
 
+        arrays = [xyz, normals, f_dc, f_rest, opacities, scale, rotation, obj_dc]
+        if self.use_color_embed:
+            color_emb = self._color_embedding.detach().cpu().numpy()
+            arrays.append(color_emb)
+
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, obj_dc), axis=1)
+        attributes = np.concatenate(arrays, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -441,6 +488,21 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._objects_dc = nn.Parameter(torch.tensor(objects_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
 
+        # Load color embedding if available and in use
+        if self.use_color_embed:
+            color_emb_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("color_emb_")]
+            if len(color_emb_names) > 0:
+                color_emb_names = sorted(color_emb_names, key=lambda x: int(x.split('_')[-1]))
+                color_emb = np.zeros((xyz.shape[0], len(color_emb_names)))
+                for idx, attr_name in enumerate(color_emb_names):
+                    color_emb[:, idx] = np.asarray(plydata.elements[0][attr_name])
+                self._color_embedding = nn.Parameter(torch.tensor(color_emb, dtype=torch.float, device="cuda").requires_grad_(True))
+                self.color_embed_dim = len(color_emb_names)
+            else:
+                # PLY file doesn't have color embeddings, initialize randomly
+                color_emb = torch.randn((xyz.shape[0], self.color_embed_dim), device="cuda") * 0.01
+                self._color_embedding = nn.Parameter(color_emb.requires_grad_(True))
+
         self.active_sh_degree = self.max_sh_degree
 
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -488,6 +550,9 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
         self._objects_dc = optimizable_tensors["obj_dc"]
 
+        if self.use_color_embed and "color_emb" in optimizable_tensors:
+            self._color_embedding = optimizable_tensors["color_emb"]
+
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
@@ -515,7 +580,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_objects_dc):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_objects_dc, new_color_embedding=None):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -523,6 +588,9 @@ class GaussianModel:
         "scaling" : new_scaling,
         "rotation" : new_rotation,
         "obj_dc": new_objects_dc}
+
+        if self.use_color_embed and new_color_embedding is not None:
+            d["color_emb"] = new_color_embedding
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -532,6 +600,9 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._objects_dc = optimizable_tensors["obj_dc"]
+
+        if self.use_color_embed and "color_emb" in optimizable_tensors:
+            self._color_embedding = optimizable_tensors["color_emb"]
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -558,7 +629,11 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_objects_dc = self._objects_dc[selected_pts_mask].repeat(N,1,1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_objects_dc)
+        new_color_embedding = None
+        if self.use_color_embed:
+            new_color_embedding = self._color_embedding[selected_pts_mask].repeat(N,1)
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_objects_dc, new_color_embedding)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -577,7 +652,11 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
         new_objects_dc = self._objects_dc[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_objects_dc)
+        new_color_embedding = None
+        if self.use_color_embed:
+            new_color_embedding = self._color_embedding[selected_pts_mask]
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_objects_dc, new_color_embedding)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom

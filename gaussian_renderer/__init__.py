@@ -15,11 +15,15 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, color_decoder = None):
     """
     Render the scene. 
     
     Background tensor (bg_color) must be on GPU!
+    
+    Args:
+        color_decoder: Optional ColorDecoder module. When provided and pc.use_color_embed is True,
+                       colors are decoded from the color embedding instead of using SH.
     """
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
@@ -69,7 +73,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
-    if override_color is None:
+    sh_objs = pc.get_objects
+    if override_color is not None:
+        colors_precomp = override_color
+    elif pc.use_color_embed and color_decoder is not None:
+        # Color embedding mode: decode embedding -> RGB via MLP
+        colors_precomp = color_decoder(pc.get_color_embedding)  # [N, 3]
+    else:
+        # Standard SH mode
         if pipe.convert_SHs_python:
             shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
             dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
@@ -78,9 +89,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
             shs = pc.get_features
-            sh_objs = pc.get_objects
-    else:
-        colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii, rendered_objects = rasterizer(

@@ -58,6 +58,8 @@ class ModelParams(ParamGroup):
         self.num_classes = 200
         self.num_objects = 16
         self.max_num_points = 0
+        self.color_embed_dim = 16
+        self.use_color_embed = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
