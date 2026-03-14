@@ -166,7 +166,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb, color_decoder=color_decoder)
+            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb, color_decoder=color_decoder, single_channel_mode=single_channel_mode, num_channels=num_channels)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -220,14 +220,16 @@ def prepare_output_and_logger(args):
         cfg_log_f.write(str(Namespace(**vars(args))))
 
 
-def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None):
+def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None, single_channel_mode=False, num_channels=3):
 
     if use_wandb:
         log_dict = {"train_loss_patches/l1_loss": Ll1.item(), "train_loss_patches/total_loss": loss.item(), "iter_time": elapsed, "iter": iteration}
         if loss_obj_3d:
             log_dict["train_loss_patches/loss_obj_3d"] = loss_obj_3d.item()
         wandb.log(log_dict)
-    
+
+    channel_names = {0: 'R', 1: 'G', 2: 'B'} if num_channels == 3 else {i: f'B{i}' for i in range(num_channels)}
+
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
@@ -238,6 +240,11 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
                 psnr_test = 0.0
+
+                per_ch_l1 = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
+                per_ch_psnr = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
+                per_ch_ssim_acc = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
+
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, color_decoder=color_decoder)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -246,13 +253,50 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
                             wandb.log({config['name'] + "_view_{}/render".format(viewpoint.image_name): [wandb.Image(image)]})
                             if iteration == testing_iterations[0]:
                                 wandb.log({config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name): [wandb.Image(gt_image)]})
+
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
-                psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
+
+                    if single_channel_mode:
+                        for ch in range(num_channels):
+                            img_ch = image[ch:ch+1]
+                            gt_ch = gt_image[ch:ch+1]
+                            per_ch_l1[ch] += l1_loss(img_ch, gt_ch).mean().double()
+                            per_ch_psnr[ch] += psnr(img_ch, gt_ch).mean().double()
+                            per_ch_ssim_acc[ch] += ssim(img_ch, gt_ch).double()
+
+                n_cams = len(config['cameras'])
+                psnr_test /= n_cams
+                l1_test /= n_cams
                 print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+
+                if single_channel_mode:
+                    for ch in range(num_channels):
+                        per_ch_l1[ch] /= n_cams
+                        per_ch_psnr[ch] /= n_cams
+                        per_ch_ssim_acc[ch] /= n_cams
+                    macro_l1 = sum(per_ch_l1.values()) / num_channels
+                    macro_psnr = sum(per_ch_psnr.values()) / num_channels
+                    macro_ssim = sum(per_ch_ssim_acc.values()) / num_channels
+                    parts = " | ".join(f"{channel_names[ch]}: L1={per_ch_l1[ch]:.5f} PSNR={per_ch_psnr[ch]:.2f} SSIM={per_ch_ssim_acc[ch]:.4f}" for ch in range(num_channels))
+                    print(f"  Per-channel [{config['name']}]: {parts}")
+                    print(f"  Macro-avg   [{config['name']}]: L1={macro_l1:.5f} PSNR={macro_psnr:.2f} SSIM={macro_ssim:.4f}")
+
                 if use_wandb:
                     wandb.log({config['name'] + "/loss_viewpoint - l1_loss": l1_test, config['name'] + "/loss_viewpoint - psnr": psnr_test})
+                    if single_channel_mode:
+                        for ch in range(num_channels):
+                            cn = channel_names[ch]
+                            wandb.log({
+                                f"{config['name']}/per_channel_{cn}_l1": per_ch_l1[ch],
+                                f"{config['name']}/per_channel_{cn}_psnr": per_ch_psnr[ch],
+                                f"{config['name']}/per_channel_{cn}_ssim": per_ch_ssim_acc[ch],
+                            })
+                        wandb.log({
+                            f"{config['name']}/macro_avg_l1": macro_l1,
+                            f"{config['name']}/macro_avg_psnr": macro_psnr,
+                            f"{config['name']}/macro_avg_ssim": macro_ssim,
+                        })
         if use_wandb:
             wandb.log({"scene/opacity_histogram": scene.gaussians.get_opacity, "total_points": scene.gaussians.get_xyz.shape[0], "iter": iteration})
         torch.cuda.empty_cache()
