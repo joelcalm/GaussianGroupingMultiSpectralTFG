@@ -146,48 +146,64 @@ def readColmapSceneInfo(path, images, eval, object_path, llffhold=8, n_views=100
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), objects_folder=os.path.join(path, object_dir))
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
+    def split_by_index(all_cam_infos):
+        train_subset = [c for idx, c in enumerate(all_cam_infos) if idx % llffhold != 0]
+        test_subset = [c for idx, c in enumerate(all_cam_infos) if idx % llffhold == 0]
+        return train_subset, test_subset
+
+    def maybe_subsample_train_views(train_subset):
+        if n_views == 100:
+            return train_subset
+        elif n_views == 50:
+            idx_sub = np.linspace(0, len(train_subset)-1, round(len(train_subset)*0.5)) # 50% views
+            idx_sub = [round(i) for i in idx_sub]
+            return [train_subset[i_sub] for i_sub in idx_sub]
+        elif isinstance(n_views, int):
+            idx_sub = np.linspace(0, len(train_subset)-1, n_views) # 3views
+            idx_sub = [round(i) for i in idx_sub]
+            train_subset = [train_subset[i_sub] for i_sub in idx_sub]
+            print(train_subset)
+            return train_subset
+        else:
+            raise NotImplementedError
+
     if eval:
         if train_split:
             train_dir = os.path.join(path, "images_train")
-            train_names = sorted(os.listdir(train_dir))
-            train_names = [train_name.split('.')[0] for train_name in train_names]
-            train_cam_infos = []
-            test_cam_infos = []
-            for cam_info in cam_infos:
-                if cam_info.image_name in train_names:
-                    train_cam_infos.append(cam_info)
-                else:
-                    test_cam_infos.append(cam_info)
+            if os.path.isdir(train_dir):
+                train_names = sorted(os.listdir(train_dir))
+                train_names = [train_name.split('.')[0] for train_name in train_names]
+                train_cam_infos = []
+                test_cam_infos = []
+                for cam_info in cam_infos:
+                    if cam_info.image_name in train_names:
+                        train_cam_infos.append(cam_info)
+                    else:
+                        test_cam_infos.append(cam_info)
+            else:
+                print(f"images_train not found at {train_dir}. Falling back to index-based split.")
+                train_cam_infos, test_cam_infos = split_by_index(cam_infos)
+                train_cam_infos = maybe_subsample_train_views(train_cam_infos)
 
         else:
-            train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-            test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
-
-            if n_views == 100:
-                pass 
-            elif n_views == 50:
-                idx_sub = np.linspace(0, len(train_cam_infos)-1, round(len(train_cam_infos)*0.5)) # 50% views
-                idx_sub = [round(i) for i in idx_sub]
-                train_cam_infos = [train_cam_infos[i_sub] for i_sub in idx_sub]
-            elif isinstance(n_views,int):
-                idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views) # 3views
-                idx_sub = [round(i) for i in idx_sub]
-                train_cam_infos = [train_cam_infos[i_sub] for i_sub in idx_sub]
-                print(train_cam_infos)
-            else:
-                raise NotImplementedError
+            train_cam_infos, test_cam_infos = split_by_index(cam_infos)
+            train_cam_infos = maybe_subsample_train_views(train_cam_infos)
         print("Training images:     ", len(train_cam_infos))
         print("Testing images:     ", len(test_cam_infos))
 
     else:
         if train_split:
             train_dir = os.path.join(path, "images_train")
-            train_names = sorted(os.listdir(train_dir))
-            train_names = [train_name.split('.')[0] for train_name in train_names]
-            train_cam_infos = []
-            for cam_info in cam_infos:
-                if cam_info.image_name in train_names:
-                    train_cam_infos.append(cam_info)
+            if os.path.isdir(train_dir):
+                train_names = sorted(os.listdir(train_dir))
+                train_names = [train_name.split('.')[0] for train_name in train_names]
+                train_cam_infos = []
+                for cam_info in cam_infos:
+                    if cam_info.image_name in train_names:
+                        train_cam_infos.append(cam_info)
+            else:
+                print(f"images_train not found at {train_dir}. Using all images for training because --eval is disabled.")
+                train_cam_infos = cam_infos
             test_cam_infos = []
         else:
             train_cam_infos = cam_infos
