@@ -68,11 +68,18 @@ class Scene:
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
+        single_channel_mode = getattr(args, 'single_channel_mode', False)
+        num_channels = getattr(args, 'num_channels', 3)
+
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(
+                scene_info.train_cameras, resolution_scale, args,
+                single_channel_mode=single_channel_mode, num_channels=num_channels)
             print("Loading Test Cameras")
-            self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
+            self.test_cameras[resolution_scale] = cameraList_from_camInfos(
+                scene_info.test_cameras, resolution_scale, args,
+                single_channel_mode=False, num_channels=num_channels)
 
         if self.loaded_iter:
             if isinstance(self.loaded_iter,str):

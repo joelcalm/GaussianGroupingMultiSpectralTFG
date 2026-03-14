@@ -18,7 +18,8 @@ from scipy.spatial.transform import Rotation as R
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", objects=None, style_transfer=False
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", objects=None, style_transfer=False,
+                 channel_idx=-1
                  ):
         super(Camera, self).__init__()
 
@@ -29,6 +30,7 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
+        self.channel_idx = channel_idx
 
         try:
             self.data_device = torch.device(data_device)

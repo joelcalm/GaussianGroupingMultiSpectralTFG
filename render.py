@@ -74,7 +74,7 @@ def visualize_obj(objects):
     return rgb_mask
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier, color_decoder=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier, color_decoder=None, single_channel_mode=False, num_channels=3):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     colormask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_feature16")
@@ -86,6 +86,14 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(gt_colormask_path, exist_ok=True)
     makedirs(pred_obj_path, exist_ok=True)
 
+    channel_paths = {}
+    if single_channel_mode:
+        channel_names = {0: 'R', 1: 'G', 2: 'B'} if num_channels == 3 else {i: f'B{i}' for i in range(num_channels)}
+        for ch_id, ch_name in channel_names.items():
+            p = os.path.join(model_path, name, "ours_{}".format(iteration), f"channel_{ch_name}")
+            makedirs(p, exist_ok=True)
+            channel_paths[ch_id] = p
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         results = render(view, gaussians, pipeline, background, color_decoder=color_decoder)
         rendering = results["render"]
@@ -95,7 +103,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         pred_obj = torch.argmax(logits,dim=0)
         pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint8))
         
-
         gt_objects = view.objects
         gt_rgb_mask = visualize_obj(gt_objects.cpu().numpy().astype(np.uint8))
 
@@ -106,6 +113,13 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+
+        if single_channel_mode:
+            for ch_id, ch_path in channel_paths.items():
+                ch_render = rendering[ch_id:ch_id+1].expand(3, -1, -1)
+                ch_gt = gt[ch_id:ch_id+1].expand(3, -1, -1)
+                ch_combined = torch.cat([ch_render, ch_gt], dim=2)
+                torchvision.utils.save_image(ch_combined, os.path.join(ch_path, '{0:05d}'.format(idx) + ".png"))
 
     out_path = os.path.join(render_path[:-8],'concat')
     makedirs(out_path,exist_ok=True)
@@ -134,17 +148,19 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     with torch.no_grad():
         use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
         color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+        single_channel_mode = getattr(dataset, 'single_channel_mode', False)
+        num_channels = getattr(dataset, 'num_channels', 3)
         gaussians = GaussianModel(dataset.sh_degree, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         num_classes = dataset.num_classes
         print("Num classes: ",num_classes)
+        print("Single channel mode: ", single_channel_mode)
 
         classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
         classifier.cuda()
         classifier.load_state_dict(torch.load(os.path.join(dataset.model_path,"point_cloud","iteration_"+str(scene.loaded_iter),"classifier.pth")))
 
-        # Load color decoder if using color embedding mode
         color_decoder = None
         if use_color_embed:
             color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
@@ -158,10 +174,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, classifier, color_decoder)
+             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, classifier, color_decoder,
+                        single_channel_mode=single_channel_mode, num_channels=num_channels)
 
         if (not skip_test) and (len(scene.getTestCameras()) > 0):
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, classifier, color_decoder)
+             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, classifier, color_decoder,
+                        single_channel_mode=single_channel_mode, num_channels=num_channels)
 
 if __name__ == "__main__":
     # Set up command line argument parser

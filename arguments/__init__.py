@@ -60,6 +60,8 @@ class ModelParams(ParamGroup):
         self.max_num_points = 0
         self.color_embed_dim = 16
         self.use_color_embed = False
+        self.single_channel_mode = False
+        self.num_channels = 3
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

@@ -29,6 +29,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     num_objects = dataset.num_objects if hasattr(dataset, 'num_objects') else 16
     use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
     color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+    single_channel_mode = getattr(dataset, 'single_channel_mode', False)
+    num_channels = getattr(dataset, 'num_channels', 3)
     gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -40,6 +42,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         print("Color embedding dim: ", color_embed_dim)
     if hasattr(dataset, 'max_num_points') and dataset.max_num_points > 0:
         print("Max num points: ", dataset.max_num_points)
+    print("Single channel mode: ", single_channel_mode)
+    if single_channel_mode:
+        print("Num channels: ", num_channels)
+        channel_names = {0: 'R', 1: 'G', 2: 'B'} if num_channels == 3 else {i: f'B{i}' for i in range(num_channels)}
+        train_cams = scene.getTrainCameras()
+        from collections import Counter
+        ch_counts = Counter(c.channel_idx for c in train_cams)
+        for ch_id in sorted(ch_counts):
+            print(f"  Channel {channel_names.get(ch_id, ch_id)}: {ch_counts[ch_id]} images")
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
@@ -113,17 +124,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
+
+        if single_channel_mode and viewpoint_cam.channel_idx >= 0:
+            ch = viewpoint_cam.channel_idx
+            image_ch = image[ch:ch+1]
+            gt_ch = gt_image[ch:ch+1]
+            Ll1 = l1_loss(image_ch, gt_ch)
+            ssim_val = ssim(image_ch, gt_ch)
+        else:
+            Ll1 = l1_loss(image, gt_image)
+            ssim_val = ssim(image, gt_image)
 
         loss_obj_3d = None
         if iteration % opt.reg3d_interval == 0:
-            # regularize at certain intervals
             logits3d = classifier(gaussians._objects_dc.permute(2,0,1))
             prob_obj3d = torch.softmax(logits3d,dim=0).squeeze().permute(1,0)
             loss_obj_3d = loss_cls_3d(gaussians._xyz.squeeze().detach(), prob_obj3d, opt.reg3d_k, opt.reg3d_lambda_val, opt.reg3d_max_points, opt.reg3d_sample_size)
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj + loss_obj_3d
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val) + loss_obj + loss_obj_3d
         else:
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image)) + loss_obj
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val) + loss_obj
 
         loss.backward()
         iter_end.record()
@@ -204,10 +223,10 @@ def prepare_output_and_logger(args):
 def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None):
 
     if use_wandb:
+        log_dict = {"train_loss_patches/l1_loss": Ll1.item(), "train_loss_patches/total_loss": loss.item(), "iter_time": elapsed, "iter": iteration}
         if loss_obj_3d:
-            wandb.log({"train_loss_patches/l1_loss": Ll1.item(), "train_loss_patches/total_loss": loss.item(), "train_loss_patches/loss_obj_3d": loss_obj_3d.item(), "iter_time": elapsed, "iter": iteration})
-        else:
-            wandb.log({"train_loss_patches/l1_loss": Ll1.item(), "train_loss_patches/total_loss": loss.item(), "iter_time": elapsed, "iter": iteration})
+            log_dict["train_loss_patches/loss_obj_3d"] = loss_obj_3d.item()
+        wandb.log(log_dict)
     
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -283,6 +302,8 @@ if __name__ == "__main__":
     args.color_embed_dim = config.get("color_embed_dim", 16)
     args.use_color_embed = config.get("use_color_embed", False)
     args.color_decoder_lr = config.get("color_decoder_lr", 0.001)
+    args.single_channel_mode = config.get("single_channel_mode", False)
+    args.num_channels = config.get("num_channels", 3)
     
     print("Optimizing " + args.model_path)
 
