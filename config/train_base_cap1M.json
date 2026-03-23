@@ -8,7 +8,7 @@
     "reg3d_lambda_val": 2,
     "reg3d_max_points": 150000,
     "reg3d_sample_size": 500,
-    "use_color_embed": true,
+    "use_color_embed": false,
     "color_embed_dim": 16,
     "single_channel_mode": false,
     "num_channels": 3

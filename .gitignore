@@ -4,6 +4,7 @@ output/
 media/
 result/
 tests/
+logs/
 
 # Python cache
 __pycache__/

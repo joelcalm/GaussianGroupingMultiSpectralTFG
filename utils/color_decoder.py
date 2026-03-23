@@ -9,8 +9,7 @@ class ColorDecoder(nn.Module):
     Input: [N, color_embed_dim] color embeddings
     Output: [N, 3] RGB colors in [0, 1]
     
-    Architecture designed to be extensible for Phase 2+ where the output
-    can change to single bands or multi-spectral channels.
+    Extensible if output is single bands or multi-spectral channels.
     """
     def __init__(self, input_dim=16, hidden_dim=32, output_dim=3):
         super().__init__()
