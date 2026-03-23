@@ -30,3 +30,5 @@ lama/models/lpips_models/*.pth
 # Misc
 *.log
 .DS_Store
+
+test_two_embeddings.py

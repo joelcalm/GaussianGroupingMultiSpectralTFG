@@ -29,6 +29,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     num_objects = dataset.num_objects if hasattr(dataset, 'num_objects') else 16
     use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
     color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+    color_decoder_hidden_dim = dataset.color_decoder_hidden_dim if hasattr(dataset, 'color_decoder_hidden_dim') else 32
+    color_decoder_num_hidden_layers = dataset.color_decoder_num_hidden_layers if hasattr(dataset, 'color_decoder_num_hidden_layers') else 2
     single_channel_mode = getattr(dataset, 'single_channel_mode', False)
     num_channels = getattr(dataset, 'num_channels', 3)
     gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
@@ -40,6 +42,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Use color embedding: ", use_color_embed)
     if use_color_embed:
         print("Color embedding dim: ", color_embed_dim)
+        print("Color decoder hidden dim: ", color_decoder_hidden_dim)
+        print("Color decoder hidden layers: ", color_decoder_num_hidden_layers)
     if hasattr(dataset, 'max_num_points') and dataset.max_num_points > 0:
         print("Max num points: ", dataset.max_num_points)
     print("Single channel mode: ", single_channel_mode)
@@ -60,7 +64,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     color_decoder = None
     color_decoder_optimizer = None
     if use_color_embed:
-        color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
+        color_decoder = ColorDecoder(
+            input_dim=color_embed_dim,
+            hidden_dim=color_decoder_hidden_dim,
+            output_dim=3,
+            num_hidden_layers=color_decoder_num_hidden_layers,
+        )
         color_decoder.cuda()
         color_decoder_lr = opt.color_decoder_lr if hasattr(opt, 'color_decoder_lr') else 1e-3
         color_decoder_optimizer = torch.optim.Adam(color_decoder.parameters(), lr=color_decoder_lr)
@@ -345,6 +354,8 @@ if __name__ == "__main__":
     args.reg3d_sample_size = config.get("reg3d_sample_size", 1000)
     args.color_embed_dim = config.get("color_embed_dim", 16)
     args.use_color_embed = config.get("use_color_embed", False)
+    args.color_decoder_hidden_dim = config.get("color_decoder_hidden_dim", 32)
+    args.color_decoder_num_hidden_layers = config.get("color_decoder_num_hidden_layers", 2)
     args.color_decoder_lr = config.get("color_decoder_lr", 0.001)
     args.single_channel_mode = config.get("single_channel_mode", False)
     args.num_channels = config.get("num_channels", 3)

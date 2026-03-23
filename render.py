@@ -148,6 +148,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
     with torch.no_grad():
         use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
         color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
+        color_decoder_hidden_dim = dataset.color_decoder_hidden_dim if hasattr(dataset, 'color_decoder_hidden_dim') else 32
+        color_decoder_num_hidden_layers = dataset.color_decoder_num_hidden_layers if hasattr(dataset, 'color_decoder_num_hidden_layers') else 2
         single_channel_mode = getattr(dataset, 'single_channel_mode', False)
         num_channels = getattr(dataset, 'num_channels', 3)
         gaussians = GaussianModel(dataset.sh_degree, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
@@ -163,7 +165,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         color_decoder = None
         if use_color_embed:
-            color_decoder = ColorDecoder(input_dim=color_embed_dim, hidden_dim=32, output_dim=3)
+            color_decoder = ColorDecoder(
+                input_dim=color_embed_dim,
+                hidden_dim=color_decoder_hidden_dim,
+                output_dim=3,
+                num_hidden_layers=color_decoder_num_hidden_layers,
+            )
             color_decoder.cuda()
             decoder_path = os.path.join(dataset.model_path,"point_cloud","iteration_"+str(scene.loaded_iter),"color_decoder.pth")
             if os.path.exists(decoder_path):
