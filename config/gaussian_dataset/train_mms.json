@@ -1,5 +1,6 @@
 {
     "densify_until_iter": 10000,
+    "densify_grad_threshold": 0.00005,
     "num_classes": 256,
     "num_objects": 16,
     "reg3d_interval": 5,

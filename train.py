@@ -46,6 +46,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         print("Color decoder hidden layers: ", color_decoder_num_hidden_layers)
     if hasattr(dataset, 'max_num_points') and dataset.max_num_points > 0:
         print("Max num points: ", dataset.max_num_points)
+    print("Num channels: ", num_channels)
+    print("Cameras extent (scene radius): ", scene.cameras_extent)
+    print("Densify grad threshold: ", opt.densify_grad_threshold)
+    print("Densify from iter: ", opt.densify_from_iter)
+    print("Densify until iter: ", opt.densify_until_iter)
     print("Single channel mode: ", single_channel_mode)
     if single_channel_mode:
         print("Num channels: ", num_channels)
@@ -196,8 +201,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if max_pts > 0 and gaussians.get_xyz.shape[0] >= max_pts:
                         tqdm.write(f"[DENSIFY] Skipping densification: {gaussians.get_xyz.shape[0]} points >= max_num_points={max_pts}")
                     else:
+                        grads = gaussians.xyz_gradient_accum / gaussians.denom
+                        grads[grads.isnan()] = 0.0
+                        grad_max = grads.max().item()
+                        grad_mean = grads.mean().item()
+                        n_above = (grads >= opt.densify_grad_threshold).sum().item()
+                        tqdm.write(f"[DENSIFY iter={iteration}] grad_max={grad_max:.6f}, grad_mean={grad_mean:.6f}, "
+                                   f"above_thresh({opt.densify_grad_threshold})={n_above}/{grads.shape[0]}, "
+                                   f"cameras_extent={scene.cameras_extent:.4f}")
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        n_before = gaussians.get_xyz.shape[0]
                         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                        n_after = gaussians.get_xyz.shape[0]
+                        if n_after != n_before:
+                            tqdm.write(f"[DENSIFY iter={iteration}] {n_before} -> {n_after} points (delta={n_after-n_before:+d})")
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -361,6 +378,8 @@ if __name__ == "__main__":
     args.color_decoder_lr = config.get("color_decoder_lr", 0.001)
     args.single_channel_mode = config.get("single_channel_mode", False)
     args.num_channels = config.get("num_channels", 3)
+    if "densify_grad_threshold" in config:
+        args.densify_grad_threshold = config["densify_grad_threshold"]
     
     print("Optimizing " + args.model_path)
 

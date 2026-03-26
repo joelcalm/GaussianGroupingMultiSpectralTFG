@@ -16,6 +16,7 @@ python train.py \
     -s data/multi-modal-studio/${SCENE} \
     -m output/${OUTPUT} \
     --eval \
+    -r 2 \
     --config_file config/gaussian_dataset/train_mms.json \
     --save_iterations 1000 7000 15000 30000 \
     --test_iterations 1000 7000 15000 30000
