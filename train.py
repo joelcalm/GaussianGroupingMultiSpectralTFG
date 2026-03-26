@@ -163,6 +163,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss.backward()
         iter_end.record()
 
+        # Gradient diagnostics (first few iterations only)
+        if iteration <= 5 or iteration == 100:
+            vp_grad = viewspace_point_tensor.grad
+            n_vis = visibility_filter.sum().item()
+            if vp_grad is not None:
+                grad_abs = vp_grad.abs()
+                tqdm.write(f"[GRAD iter={iteration}] visible={n_vis}/{visibility_filter.shape[0]}, "
+                           f"vp_grad: max={grad_abs.max().item():.8f}, mean={grad_abs.mean().item():.8f}, "
+                           f"nonzero={grad_abs.sum(dim=-1).nonzero().shape[0]}, "
+                           f"loss={loss.item():.6f}, Ll1={Ll1.item():.6f}")
+            else:
+                tqdm.write(f"[GRAD iter={iteration}] visible={n_vis}/{visibility_filter.shape[0]}, "
+                           f"vp_grad=NONE, loss={loss.item():.6f}")
+
         # Memory tracking every 100 iterations
         if iteration % 100 == 0 or iteration == 1:
             torch.cuda.synchronize()
