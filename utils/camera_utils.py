@@ -15,15 +15,27 @@ from PIL import Image
 from utils.general_utils import PILtoTorch
 from utils.graphics_utils import fov2focal
 import torch
+from scipy.ndimage import zoom as ndimage_zoom
 
 WARNED = False
+
+def _resize_multispectral(ms_array, resolution):
+    """Resize a [H, W, C] float32 numpy array to (target_w, target_h)."""
+    target_w, target_h = resolution
+    h, w, c = ms_array.shape
+    if h == target_h and w == target_w:
+        return ms_array
+    scale_h = target_h / h
+    scale_w = target_w / w
+    return ndimage_zoom(ms_array, (scale_h, scale_w, 1), order=1)
+
 
 def loadCam(args, id, cam_info, resolution_scale, **kwargs):
     orig_w, orig_h = cam_info.image.size
 
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
-    else:  # should be a type that converts to float
+    else:
         if args.resolution == -1:
             if orig_w > 1600:
                 global WARNED
@@ -40,13 +52,18 @@ def loadCam(args, id, cam_info, resolution_scale, **kwargs):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    resized_image_rgb = PILtoTorch(cam_info.image, resolution)
-
-    gt_image = resized_image_rgb[:3, ...]
-    loaded_mask = None
-
-    if resized_image_rgb.shape[1] == 4:
-        loaded_mask = resized_image_rgb[3:4, ...]
+    ms_path = getattr(cam_info, 'multispectral_path', None)
+    if ms_path is not None:
+        ms_array = np.load(ms_path)  # [H, W, C] float32 in [0, 1]
+        ms_array = _resize_multispectral(ms_array, resolution)
+        gt_image = torch.from_numpy(ms_array).permute(2, 0, 1).float()  # [C, H, W]
+        loaded_mask = None
+    else:
+        resized_image_rgb = PILtoTorch(cam_info.image, resolution)
+        gt_image = resized_image_rgb[:3, ...]
+        loaded_mask = None
+        if resized_image_rgb.shape[0] == 4:
+            loaded_mask = resized_image_rgb[3:4, ...]
 
     objects = cam_info.objects
     if objects is not None:

@@ -60,14 +60,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
     classifier.cuda()
 
-    # Create color decoder if using color embedding mode
     color_decoder = None
     color_decoder_optimizer = None
     if use_color_embed:
         color_decoder = ColorDecoder(
             input_dim=color_embed_dim,
             hidden_dim=color_decoder_hidden_dim,
-            output_dim=3,
+            output_dim=num_channels,
             num_hidden_layers=color_decoder_num_hidden_layers,
         )
         color_decoder.cuda()
@@ -78,7 +77,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
-    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    bg_color = [1] * num_channels if dataset.white_background else [0] * num_channels
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     iter_start = torch.cuda.Event(enable_timing = True)
@@ -98,6 +97,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
                     net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer, color_decoder=color_decoder)["render"]
+                    if net_image.shape[0] > 3:
+                        vis_ch = [0, 3, 6] if net_image.shape[0] >= 7 else list(range(3))
+                        net_image = net_image[vis_ch]
                     net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
                 network_gui.send(net_image_bytes, dataset.source_path)
                 if do_training and ((iteration < int(opt.iterations)) or not keep_alive):

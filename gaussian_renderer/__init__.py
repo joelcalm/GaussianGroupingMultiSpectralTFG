@@ -77,8 +77,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     if override_color is not None:
         colors_precomp = override_color
     elif pc.use_color_embed and color_decoder is not None:
-        # Color embedding mode: decode embedding -> RGB via MLP
-        colors_precomp = color_decoder(pc.get_color_embedding)  # [N, 3]
+        colors_precomp = color_decoder(pc.get_color_embedding)  # [N, num_channels]
     else:
         # Standard SH mode
         if pipe.convert_SHs_python:

@@ -87,7 +87,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(pred_obj_path, exist_ok=True)
 
     channel_paths = {}
-    if single_channel_mode:
+    if single_channel_mode or num_channels > 3:
         channel_names = {0: 'R', 1: 'G', 2: 'B'} if num_channels == 3 else {i: f'B{i}' for i in range(num_channels)}
         for ch_id, ch_name in channel_names.items():
             p = os.path.join(model_path, name, "ours_{}".format(iteration), f"channel_{ch_name}")
@@ -110,11 +110,20 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(gt_rgb_mask).save(os.path.join(gt_colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(pred_obj_mask).save(os.path.join(pred_obj_path, '{0:05d}'.format(idx) + ".png"))
-        gt = view.original_image[0:3, :, :]
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        gt = view.original_image[:num_channels, :, :]
 
-        if single_channel_mode:
+        if num_channels > 3:
+            # For multispectral: save pseudo-RGB using channels [0, 3, 6] (or first 3)
+            vis_ch = [0, 3, 6] if num_channels >= 7 else list(range(min(3, num_channels)))
+            render_vis = rendering[vis_ch]
+            gt_vis = gt[vis_ch]
+            torchvision.utils.save_image(render_vis, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+            torchvision.utils.save_image(gt_vis, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        else:
+            torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+            torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+
+        if single_channel_mode or num_channels > 3:
             for ch_id, ch_path in channel_paths.items():
                 ch_render = rendering[ch_id:ch_id+1].expand(3, -1, -1)
                 ch_gt = gt[ch_id:ch_id+1].expand(3, -1, -1)
@@ -123,19 +132,25 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     out_path = os.path.join(render_path[:-8],'concat')
     makedirs(out_path,exist_ok=True)
-    fourcc = cv2.VideoWriter.fourcc(*'DIVX') 
-    size = (gt.shape[-1]*5,gt.shape[-2])
+
+    gt_files = sorted(os.listdir(gts_path))
+    if len(gt_files) == 0:
+        return
+
+    sample_gt = np.array(Image.open(os.path.join(gts_path, gt_files[0])))
+    fourcc = cv2.VideoWriter.fourcc(*'DIVX')
+    size = (sample_gt.shape[1]*5, sample_gt.shape[0])
     fps = float(5) if 'train' in out_path else float(1)
     writer = cv2.VideoWriter(os.path.join(out_path,'result.mp4'), fourcc, fps, size)
 
-    for file_name in sorted(os.listdir(gts_path)):
-        gt = np.array(Image.open(os.path.join(gts_path,file_name)))
+    for file_name in gt_files:
+        gt_img = np.array(Image.open(os.path.join(gts_path,file_name)))
         rgb = np.array(Image.open(os.path.join(render_path,file_name)))
         gt_obj = np.array(Image.open(os.path.join(gt_colormask_path,file_name)))
         render_obj = np.array(Image.open(os.path.join(colormask_path,file_name)))
         pred_obj = np.array(Image.open(os.path.join(pred_obj_path,file_name)))
 
-        result = np.hstack([gt,rgb,gt_obj,pred_obj,render_obj])
+        result = np.hstack([gt_img,rgb,gt_obj,pred_obj,render_obj])
         result = result.astype('uint8')
 
         Image.fromarray(result).save(os.path.join(out_path,file_name))
@@ -168,7 +183,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             color_decoder = ColorDecoder(
                 input_dim=color_embed_dim,
                 hidden_dim=color_decoder_hidden_dim,
-                output_dim=3,
+                output_dim=num_channels,
                 num_hidden_layers=color_decoder_num_hidden_layers,
             )
             color_decoder.cuda()
@@ -177,7 +192,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                 color_decoder.load_state_dict(torch.load(decoder_path))
             color_decoder.eval()
 
-        bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
+        bg_color = [1] * num_channels if dataset.white_background else [0] * num_channels
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:

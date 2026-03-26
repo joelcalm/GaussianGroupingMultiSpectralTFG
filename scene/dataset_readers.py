@@ -32,6 +32,7 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     objects: np.array
+    multispectral_path: str = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -63,11 +64,10 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder, multispectral_folder=None):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
-        # the exact output you're looking for:
         sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
         sys.stdout.flush()
 
@@ -98,8 +98,15 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_fol
         object_path = os.path.join(objects_folder, image_name + '.png')
         objects = Image.open(object_path) if os.path.exists(object_path) else None
 
+        ms_path = None
+        if multispectral_folder is not None:
+            ms_candidate = os.path.join(multispectral_folder, image_name + '.npy')
+            if os.path.exists(ms_candidate):
+                ms_path = ms_candidate
+
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height, objects=objects)
+                              image_path=image_path, image_name=image_name, width=width, height=height,
+                              objects=objects, multispectral_path=ms_path)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -143,7 +150,14 @@ def readColmapSceneInfo(path, images, eval, object_path, llffhold=8, n_views=100
 
     reading_dir = "images" if images == None else images
     object_dir = 'object_mask' if object_path == None else object_path
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), objects_folder=os.path.join(path, object_dir))
+    multispectral_dir = os.path.join(path, "images_multispectral")
+    ms_folder = multispectral_dir if os.path.isdir(multispectral_dir) else None
+    if ms_folder:
+        print(f"Found multispectral images at {ms_folder}")
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
+                                           images_folder=os.path.join(path, reading_dir),
+                                           objects_folder=os.path.join(path, object_dir),
+                                           multispectral_folder=ms_folder)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     def split_by_index(all_cam_infos):
