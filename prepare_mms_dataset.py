@@ -37,10 +37,14 @@ from scipy.spatial.transform import Rotation as Rot
 
 
 def camtoworld_to_colmap(camtoworld_3x4):
-    """Convert a 3x4 camera-to-world matrix (OpenCV convention) to COLMAP
-    quaternion + translation (world-to-camera)."""
+    """Convert a 3x4 camera-to-world matrix from MMS (OpenGL-style: Y up, Z back)
+    to COLMAP quaternion + translation (OpenCV: Y down, Z forward)."""
     c2w = np.eye(4)
     c2w[:3, :] = np.array(camtoworld_3x4)
+
+    # MMS uses OpenGL-style axes (Y up, Z backward).
+    # COLMAP/OpenCV uses (Y down, Z forward). Flip Y and Z axes.
+    c2w[:3, 1:3] *= -1
 
     w2c = np.linalg.inv(c2w)
     R_w2c = w2c[:3, :3]
