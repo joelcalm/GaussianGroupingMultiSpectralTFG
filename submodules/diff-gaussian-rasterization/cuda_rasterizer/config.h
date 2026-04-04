@@ -10,7 +10,7 @@
 #ifndef CUDA_RASTERIZER_CONFIG_H_INCLUDED
 #define CUDA_RASTERIZER_CONFIG_H_INCLUDED
 
-#define NUM_CHANNELS 9 // N for multispectral, 3 for RGB
+#define NUM_CHANNELS 20 // N for multispectral, 3 for RGB
 #define NUM_OBJECTS 16 // Default 16, identity encoding
 #define BLOCK_X 16
 #define BLOCK_Y 16

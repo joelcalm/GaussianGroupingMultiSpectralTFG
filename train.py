@@ -7,6 +7,8 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 
 import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="3"
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim, loss_cls_3d

@@ -55,10 +55,6 @@ def add_common_eval_args(parser: ArgumentParser):
         type=int,
         help='Resize the shorter side to this size. -1 to use original resolution. ')
 
-    parser.add_argument('--use_short_id',
-        action='store_true',
-        help='short id in [0,199] for classification')
-
 
 def get_model_and_config(parser: ArgumentParser):
     args = parser.parse_args()

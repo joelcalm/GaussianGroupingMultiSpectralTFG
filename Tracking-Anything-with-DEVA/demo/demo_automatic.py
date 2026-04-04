@@ -1,4 +1,6 @@
 import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="3"
 from os import path
 from argparse import ArgumentParser
 
@@ -56,10 +58,7 @@ if __name__ == '__main__':
 
     deva = DEVAInferenceCore(deva_model, config=cfg)
     deva.next_voting_frame = args.num_voting_frames - 1
-    if args.use_short_id:
-        pass
-    else:
-        deva.enabled_long_id()
+    deva.enabled_long_id()
     result_saver = ResultSaver(out_path, None, dataset='demo', object_manager=deva.object_manager)
 
     with torch.cuda.amp.autocast(enabled=args.amp):

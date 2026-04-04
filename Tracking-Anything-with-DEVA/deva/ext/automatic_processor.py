@@ -19,10 +19,9 @@ from segment_anything import SamAutomaticMaskGenerator
 def make_segmentation(cfg: Dict, image_np: np.ndarray, forward_mask: Optional[torch.Tensor],
                       sam_model: SamAutomaticMaskGenerator, min_side: int,
                       suppress_small_mask: bool) -> (torch.Tensor, List[ObjectInfo]):
-
-    mask, segments_info, scored_mask = auto_segment(cfg, sam_model, image_np, forward_mask, min_side,
-                                    suppress_small_mask)
-    return mask, segments_info, scored_mask
+    mask, segments_info = auto_segment(cfg, sam_model, image_np, forward_mask, min_side,
+                                       suppress_small_mask)
+    return mask, segments_info
 
 
 @torch.inference_mode()
@@ -58,15 +57,11 @@ def process_frame_automatic(deva: DEVAInferenceCore,
             else:
                 forward_mask = None
 
-            mask, segments_info, scored_mask = make_segmentation(cfg, image_np, forward_mask, sam_model,
+            mask, segments_info = make_segmentation(cfg, image_np, forward_mask, sam_model,
                                                     new_min_side, suppress_small_mask)
             frame_info.mask = mask
             frame_info.segments_info = segments_info
             frame_info.image_np = image_np  # for visualization only
-            # mask_input = mask
-            # mask_input = mask_input.byte().cpu().numpy()
-            # Image.fromarray(mask_input).save('method_figure/debug/'+frame_info.name)
-
             # wait for more frames before proceeding
             deva.add_to_temporary_buffer(frame_info)
 
@@ -78,7 +73,10 @@ def process_frame_automatic(deva: DEVAInferenceCore,
 
                 _, mask, new_segments_info = deva.vote_in_temporary_buffer(
                     keyframe_selection='first')
-                prob = deva.incorporate_detection(this_image, mask, new_segments_info)
+                prob = deva.incorporate_detection(this_image,
+                                                  mask,
+                                                  new_segments_info,
+                                                  incremental=True)
                 deva.next_voting_frame += cfg['detection_every']
 
                 result_saver.save_mask(prob,
@@ -119,7 +117,7 @@ def process_frame_automatic(deva: DEVAInferenceCore,
             mask, segments_info = make_segmentation(cfg, image_np, forward_mask, sam_model,
                                                     new_min_side, suppress_small_mask)
             frame_info.segments_info = segments_info
-            prob = deva.incorporate_detection(image, mask, segments_info)
+            prob = deva.incorporate_detection(image, mask, segments_info, incremental=True)
         else:
             # Run the model on this frame
             prob = deva.step(image, None, None)

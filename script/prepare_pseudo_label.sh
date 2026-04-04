@@ -38,7 +38,7 @@ python demo/demo_automatic.py \
   --output "./example/output_gaussian_dataset/${dataset_name}" \
   --suppress_small_objects  \
   --SAM_PRED_IOU_THRESHOLD 0.7 \
-  --sam_variant mobile \
+  --sam_variant mobile
 
 
 mv ./example/output_gaussian_dataset/${dataset_name}/Annotations ./example/output_gaussian_dataset/${dataset_name}/Annotations_color
@@ -51,10 +51,9 @@ python demo/demo_automatic.py \
   --temporal_setting semionline \
   --size 480 \
   --output "./example/output_gaussian_dataset/${dataset_name}" \
-  --use_short_id  \
   --suppress_small_objects  \
   --SAM_PRED_IOU_THRESHOLD 0.7 \
-  --sam_variant mobile \
+  --sam_variant mobile
   
 # 2. copy gray mask to the correponding data path
 cp -r ./example/output_gaussian_dataset/${dataset_name}/Annotations ../data/${dataset_name}/object_mask

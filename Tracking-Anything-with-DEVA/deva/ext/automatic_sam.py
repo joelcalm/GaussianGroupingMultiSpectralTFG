@@ -83,7 +83,7 @@ def auto_segment(config: Dict, auto_sam: SamAutomaticMaskGenerator, image: np.nd
         if len(positive_points) == 0:
             output_mask = torch.zeros((new_h, new_w), dtype=torch.int64, device=device)
             segments_info = []
-            return output_mask, segments_info, None
+            return output_mask, segments_info
         # negative_points = points[points_label >= 0.5].cpu().numpy()
         negative_points = None  # no negative points
         mask_data = auto_sam.generate(image, positive_points, negative_points)
@@ -92,7 +92,6 @@ def auto_segment(config: Dict, auto_sam: SamAutomaticMaskGenerator, image: np.nd
 
     curr_id = 1
     segments_info = []
-    scored_masks = None
 
     pred_masks = mask_data['masks'].float()  # num masks * H * W
     predicted_iou = mask_data["iou_preds"]
@@ -143,4 +142,4 @@ def auto_segment(config: Dict, auto_sam: SamAutomaticMaskGenerator, image: np.nd
                     segments_info.append(ObjectInfo(id=curr_id, score=predicted_iou[k].item()))
                     curr_id += 1
 
-    return output_mask, segments_info, scored_masks
+    return output_mask, segments_info

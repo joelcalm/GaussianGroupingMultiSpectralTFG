@@ -1,6 +1,8 @@
 # Data and outputs
 data/
+data
 output/
+output
 media/
 result/
 tests/

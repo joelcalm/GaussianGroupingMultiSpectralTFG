@@ -66,11 +66,7 @@ class ResultSaver:
             self.all_annotations = []
             self.video_json = {'annotations': self.all_annotations}
             self.json_style = 'vipseg'
-            if self.object_manager.use_long_id:
-                self.visualize = True
-            else:
-                self.visualize = False
-            
+            self.visualize = True
             self.visualize_postfix = 'Visualizations'
             self.output_postfix = 'Annotations'
         elif self.dataset == 'gradio':
@@ -105,7 +101,6 @@ class ResultSaver:
         # Probability mask -> index mask
         mask = torch.argmax(prob, dim=0)
 
-        # os.makedirs(os.path.join(self.output_root,'object_mask'),exist_ok=True)
         args = ResultArgs(
             saver=self,
             mask=mask.cpu(),
@@ -219,7 +214,8 @@ def save_result(queue: Queue):
                     rgb_mask[obj_mask] = colored_mask
                 out_img = Image.fromarray(rgb_mask)
             else:
-                out_img = Image.fromarray(mask.numpy().astype(np.uint8))
+                out_mask = mask.numpy().astype(np.uint8)
+                out_img = Image.fromarray(out_mask)
                 if saver.palette is not None:
                     out_img.putpalette(saver.palette)
 
@@ -235,7 +231,7 @@ def save_result(queue: Queue):
                 os.makedirs(this_out_path, exist_ok=True)
                 out_img.save(path.join(this_out_path, frame_name[:-4] + '.png'))
 
-            if saver.visualize:
+            if saver.visualize and saver.object_manager.use_long_id:
                 if image_np is None:
                     if path_to_image is not None:
                         image_np = np.array(Image.open(path_to_image))
@@ -264,10 +260,13 @@ def save_result(queue: Queue):
                         detections = sv.Detections(xyxy,
                                                    confidence=np.array(all_scores),
                                                    class_id=np.array(all_cat_ids))
-                        annotator = sv.BoxAnnotator()
-                        blend = annotator.annotate(scene=blend,
-                                                   detections=detections,
-                                                   labels=labels)
+                        box_annotator = sv.BoundingBoxAnnotator()
+                        label_annotator = sv.LabelAnnotator()
+                        blend = box_annotator.annotate(scene=blend,
+                                                   detections=detections)
+                        blend = label_annotator.annotate(scene=blend,
+                                                        detections=detections,
+                                                        labels=labels)
 
                 if saver.dataset != 'gradio':
                     # find a place to save the visualization

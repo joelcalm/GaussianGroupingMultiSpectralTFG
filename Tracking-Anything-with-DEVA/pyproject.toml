@@ -5,6 +5,11 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.yapf]
+based_on_style = "pep8"
+indent_width = 4
+column_limit = 100
+
 [project]
 name = "deva"
 version = "1.0.0"
@@ -24,15 +29,18 @@ dependencies = [
   'numpy >= 1.22',
   'Pillow >= 9.5',
   'opencv-python >= 4.8',
-  'scipy >= 1.10.0',
+  'scipy >= 1.11.2',
   'pycocotools >= 2.0.7',
-  'supervision >= 0.14',
+  'supervision >= 0.18',
   'tqdm >= 4.66.1',
   'gurobipy >= 10.0.3',
   'PuLP >= 2.7',
   'gradio >= 3.44',
   'gdown >= 4.7.1',
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["deva"]
 
 [project.urls]
 "Homepage" = "https://github.com/hkchengrex/Tracking-Anything-with-DEVA"
