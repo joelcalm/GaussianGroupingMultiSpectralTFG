@@ -113,12 +113,13 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[:num_channels, :, :]
 
         if num_channels > 3:
-            # For multispectral: save pseudo-RGB using channels [0, 3, 6] (or first 3)
             vis_ch = [0, 3, 6] if num_channels >= 7 else list(range(min(3, num_channels)))
             render_vis = rendering[vis_ch]
             gt_vis = gt[vis_ch]
             torchvision.utils.save_image(render_vis, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
             torchvision.utils.save_image(gt_vis, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+            np.save(os.path.join(render_path, '{0:05d}'.format(idx) + ".npy"), torch.clamp(rendering, 0.0, 1.0).cpu().numpy())
+            np.save(os.path.join(gts_path, '{0:05d}'.format(idx) + ".npy"), gt.cpu().numpy())
         else:
             torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
             torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
@@ -133,7 +134,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     out_path = os.path.join(render_path[:-8],'concat')
     makedirs(out_path,exist_ok=True)
 
-    gt_files = sorted(os.listdir(gts_path))
+    gt_files = sorted(f for f in os.listdir(gts_path) if f.endswith(".png"))
     if len(gt_files) == 0:
         return
 

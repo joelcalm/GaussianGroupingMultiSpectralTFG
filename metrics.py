@@ -12,6 +12,7 @@
 from pathlib import Path
 import os
 from PIL import Image
+import numpy as np
 import torch
 import torchvision.transforms.functional as tf
 from utils.loss_utils import ssim, l1_loss
@@ -37,7 +38,18 @@ def readImages(renders_dir, gt_dir):
     renders = []
     gts = []
     image_names = []
+    npy_files = sorted(f for f in os.listdir(renders_dir) if f.endswith('.npy'))
+    if npy_files:
+        for fname in npy_files:
+            render = np.load(renders_dir / fname)
+            gt = np.load(gt_dir / fname)
+            renders.append(torch.from_numpy(render).unsqueeze(0).cuda())
+            gts.append(torch.from_numpy(gt).unsqueeze(0).cuda())
+            image_names.append(fname)
+        return renders, gts, image_names
     for fname in sorted(os.listdir(renders_dir)):
+        if not fname.endswith('.png'):
+            continue
         render = Image.open(renders_dir / fname)
         gt = Image.open(gt_dir / fname)
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
@@ -92,27 +104,32 @@ def evaluate(model_paths):
                 renders_dir = method_dir / "renders"
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
 
-                # --- Full-RGB metrics (always computed) ---
+                # --- Full metrics (always computed) ---
                 ssims = []
                 psnrs = []
                 lpipss = []
                 l1s = []
 
-                # --- Per-channel accumulators ---
+                img_channels = renders[0].shape[1] if len(renders) > 0 else 3
+                eval_num_ch = min(num_channels, img_channels)
+                vis_ch = [0, 3, 6] if img_channels >= 7 else list(range(min(3, img_channels)))
+
                 if single_channel_mode:
-                    ch_ssims = {ch: [] for ch in range(num_channels)}
-                    ch_psnrs = {ch: [] for ch in range(num_channels)}
-                    ch_lpipss = {ch: [] for ch in range(num_channels)}
-                    ch_l1s = {ch: [] for ch in range(num_channels)}
+                    ch_ssims = {ch: [] for ch in range(eval_num_ch)}
+                    ch_psnrs = {ch: [] for ch in range(eval_num_ch)}
+                    ch_lpipss = {ch: [] for ch in range(eval_num_ch)}
+                    ch_l1s = {ch: [] for ch in range(eval_num_ch)}
 
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
                     ssims.append(ssim(renders[idx], gts[idx]))
                     psnrs.append(psnr(renders[idx], gts[idx]))
-                    lpipss.append(compute_lpips(renders[idx], gts[idx]))
                     l1s.append(l1_loss(renders[idx], gts[idx]).item())
+                    r_lpips = renders[idx][:, vis_ch, :, :] if img_channels > 3 else renders[idx]
+                    g_lpips = gts[idx][:, vis_ch, :, :] if img_channels > 3 else gts[idx]
+                    lpipss.append(compute_lpips(r_lpips, g_lpips))
 
                     if single_channel_mode:
-                        for ch in range(num_channels):
+                        for ch in range(eval_num_ch):
                             r_ch = renders[idx][:, ch:ch+1, :, :]
                             g_ch = gts[idx][:, ch:ch+1, :, :]
                             ch_ssims[ch].append(ssim(r_ch, g_ch))
@@ -122,8 +139,8 @@ def evaluate(model_paths):
                             ch_lpipss[ch].append(compute_lpips(r_ch_3, g_ch_3))
                             ch_l1s[ch].append(l1_loss(r_ch, g_ch).item())
 
-                # --- Print full-RGB results ---
-                print("  [Full RGB]")
+                full_label = f"Full ({img_channels}-ch)" if img_channels > 3 else "Full RGB"
+                print(f"  [{full_label}]")
                 print("    SSIM : {:>12.7f}".format(torch.tensor(ssims).mean()))
                 print("    PSNR : {:>12.7f}".format(torch.tensor(psnrs).mean()))
                 print("    LPIPS: {:>12.7f}".format(torch.tensor(lpipss).mean()))
@@ -144,10 +161,10 @@ def evaluate(model_paths):
 
                 # --- Print & store per-channel results ---
                 if single_channel_mode:
-                    print("  [Per-channel]")
+                    print(f"  [Per-channel] ({eval_num_ch} channels)")
                     macro_ssim, macro_psnr, macro_lpips, macro_l1 = 0.0, 0.0, 0.0, 0.0
-                    for ch in range(num_channels):
-                        cn = channel_names[ch]
+                    for ch in range(eval_num_ch):
+                        cn = channel_names.get(ch, f'B{ch}')
                         s = torch.tensor(ch_ssims[ch]).mean().item()
                         p = torch.tensor(ch_psnrs[ch]).mean().item()
                         lp = torch.tensor(ch_lpipss[ch]).mean().item()
@@ -164,8 +181,8 @@ def evaluate(model_paths):
                         per_view_dict[scene_dir][method][f"ch_{cn}_LPIPS"] = {name: v for v, name in zip(torch.tensor(ch_lpipss[ch]).tolist(), image_names)}
                         per_view_dict[scene_dir][method][f"ch_{cn}_L1"] = {name: v for v, name in zip(ch_l1s[ch], image_names)}
 
-                    macro_ssim /= num_channels; macro_psnr /= num_channels
-                    macro_lpips /= num_channels; macro_l1 /= num_channels
+                    macro_ssim /= eval_num_ch; macro_psnr /= eval_num_ch
+                    macro_lpips /= eval_num_ch; macro_l1 /= eval_num_ch
                     print(f"    Macro-avg: SSIM={macro_ssim:.7f}  PSNR={macro_psnr:.7f}  LPIPS={macro_lpips:.7f}  L1={macro_l1:.7f}")
                     full_dict[scene_dir][method]["macro_SSIM"] = macro_ssim
                     full_dict[scene_dir][method]["macro_PSNR"] = macro_psnr

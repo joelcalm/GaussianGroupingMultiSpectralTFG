@@ -55,13 +55,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Densify until iter: ", opt.densify_until_iter)
     print("Single channel mode: ", single_channel_mode)
     if single_channel_mode:
-        print("Num channels: ", num_channels)
-        channel_names = {0: 'R', 1: 'G', 2: 'B'} if num_channels == 3 else {i: f'B{i}' for i in range(num_channels)}
-        train_cams = scene.getTrainCameras()
-        from collections import Counter
-        ch_counts = Counter(c.channel_idx for c in train_cams)
-        for ch_id in sorted(ch_counts):
-            print(f"  Channel {channel_names.get(ch_id, ch_id)}: {ch_counts[ch_id]} images")
+        print(f"  Training with random per-iteration channel selection over {num_channels} channels")
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
     cls_criterion = torch.nn.CrossEntropyLoss(reduction='none')
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=5e-4)
@@ -143,8 +137,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
 
-        if single_channel_mode and viewpoint_cam.channel_idx >= 0:
-            ch = viewpoint_cam.channel_idx
+        if single_channel_mode:
+            ch = randint(0, num_channels - 1)
             image_ch = image[ch:ch+1]
             gt_ch = gt_image[ch:ch+1]
             Ll1 = l1_loss(image_ch, gt_ch)
