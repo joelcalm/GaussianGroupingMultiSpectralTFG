@@ -23,6 +23,7 @@ import colorsys
 import cv2
 from sklearn.decomposition import PCA
 from utils.color_decoder import ColorDecoder
+import json
 
 def feature_to_rgb(features):
     # Input features shape: (16, H, W)
@@ -45,7 +46,7 @@ def feature_to_rgb(features):
 
     return rgb_array
 
-def id2rgb(id, max_num_obj=256):
+def id2rgb(id, max_num_obj=65535):
     if not 0 <= id <= max_num_obj:
         raise ValueError("ID should be in range(0, max_num_obj)")
 
@@ -94,6 +95,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             makedirs(p, exist_ok=True)
             channel_paths[ch_id] = p
 
+    frames_index = []
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         results = render(view, gaussians, pipeline, background, color_decoder=color_decoder)
         rendering = results["render"]
@@ -101,16 +103,28 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         
         logits = classifier(rendering_obj)
         pred_obj = torch.argmax(logits,dim=0)
-        pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint8))
+        pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint32))
         
         gt_objects = view.objects
-        gt_rgb_mask = visualize_obj(gt_objects.cpu().numpy().astype(np.uint8))
+        if gt_objects is not None:
+            gt_rgb_mask = visualize_obj(gt_objects.cpu().numpy().astype(np.uint32))
+        else:
+            gt_rgb_mask = np.zeros((view.image_height, view.image_width, 3), dtype=np.uint8)
 
         rgb_mask = feature_to_rgb(rendering_obj)
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(gt_rgb_mask).save(os.path.join(gt_colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(pred_obj_mask).save(os.path.join(pred_obj_path, '{0:05d}'.format(idx) + ".png"))
         gt = view.original_image[:num_channels, :, :]
+        active_channels = getattr(view, "active_channels", None)
+        active_channels = active_channels.tolist() if active_channels is not None else list(range(gt.shape[0]))
+        frames_index.append({
+            "index": idx,
+            "file_stem": "{0:05d}".format(idx),
+            "image_name": view.image_name,
+            "active_channels": [int(c) for c in active_channels],
+            "has_object_mask": gt_objects is not None,
+        })
 
         if num_channels > 3:
             vis_ch = [0, 3, 6] if num_channels >= 7 else list(range(min(3, num_channels)))
@@ -130,6 +144,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                 ch_gt = gt[ch_id:ch_id+1].expand(3, -1, -1)
                 ch_combined = torch.cat([ch_render, ch_gt], dim=2)
                 torchvision.utils.save_image(ch_combined, os.path.join(ch_path, '{0:05d}'.format(idx) + ".png"))
+
+    with open(os.path.join(model_path, name, "ours_{}".format(iteration), "frames_index.json"), "w") as f:
+        json.dump(frames_index, f, indent=2)
 
     out_path = os.path.join(render_path[:-8],'concat')
     makedirs(out_path,exist_ok=True)
@@ -168,7 +185,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         color_decoder_num_hidden_layers = dataset.color_decoder_num_hidden_layers if hasattr(dataset, 'color_decoder_num_hidden_layers') else 2
         single_channel_mode = getattr(dataset, 'single_channel_mode', False)
         num_channels = getattr(dataset, 'num_channels', 3)
-        gaussians = GaussianModel(dataset.sh_degree, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
+        num_objects = getattr(dataset, 'num_objects', 16)
+        gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         num_classes = dataset.num_classes

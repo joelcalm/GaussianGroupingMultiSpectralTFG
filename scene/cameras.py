@@ -19,7 +19,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", objects=None, style_transfer=False,
-                 channel_idx=-1
+                 channel_idx=-1, active_channels=None
                  ):
         super(Camera, self).__init__()
 
@@ -31,6 +31,9 @@ class Camera(nn.Module):
         self.FoVy = FoVy
         self.image_name = image_name
         self.channel_idx = channel_idx
+        if active_channels is None:
+            active_channels = list(range(image.shape[0]))
+        self.active_channels = torch.tensor(active_channels, dtype=torch.long)
 
         try:
             self.data_device = torch.device(data_device)
@@ -80,4 +83,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

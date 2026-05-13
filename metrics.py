@@ -57,6 +57,43 @@ def readImages(renders_dir, gt_dir):
         image_names.append(fname)
     return renders, gts, image_names
 
+def read_frames_index(method_dir):
+    index_path = method_dir / "frames_index.json"
+    if not index_path.exists():
+        return {}
+    with open(index_path) as f:
+        rows = json.load(f)
+    active = {}
+    for row in rows:
+        stem = row.get("file_stem", f"{int(row['index']):05d}")
+        channels = row.get("active_channels")
+        if channels:
+            active[f"{stem}.npy"] = [int(c) for c in channels]
+            active[f"{stem}.png"] = [int(c) for c in channels]
+    return active
+
+def select_active_channels(render, gt, image_name, active_by_name):
+    channels = active_by_name.get(image_name)
+    if not channels:
+        return render, gt, list(range(render.shape[1]))
+    valid = [ch for ch in channels if 0 <= ch < render.shape[1] and ch < gt.shape[1]]
+    if not valid:
+        return render, gt, list(range(render.shape[1]))
+    return render[:, valid, :, :], gt[:, valid, :, :], valid
+
+def lpips_inputs(render, gt):
+    if render.shape[1] == 1:
+        return render.expand(-1, 3, -1, -1), gt.expand(-1, 3, -1, -1)
+    if render.shape[1] == 2:
+        return render[:, :1].expand(-1, 3, -1, -1), gt[:, :1].expand(-1, 3, -1, -1)
+    if render.shape[1] > 3:
+        vis_ch = [0, 3, 6] if render.shape[1] >= 7 else list(range(3))
+        vis_ch = [ch for ch in vis_ch if ch < render.shape[1]]
+        if len(vis_ch) < 3:
+            vis_ch = list(range(3))
+        return render[:, vis_ch, :, :], gt[:, vis_ch, :, :]
+    return render, gt
+
 def read_cfg_args(scene_dir):
     """Read saved cfg_args to detect single_channel_mode."""
     cfg_path = os.path.join(scene_dir, "cfg_args")
@@ -103,6 +140,7 @@ def evaluate(model_paths):
                 gt_dir = method_dir/ "gt"
                 renders_dir = method_dir / "renders"
                 renders, gts, image_names = readImages(renders_dir, gt_dir)
+                active_by_name = read_frames_index(method_dir)
 
                 # --- Full metrics (always computed) ---
                 ssims = []
@@ -121,15 +159,17 @@ def evaluate(model_paths):
                     ch_l1s = {ch: [] for ch in range(eval_num_ch)}
 
                 for idx in tqdm(range(len(renders)), desc="Metric evaluation progress"):
-                    ssims.append(ssim(renders[idx], gts[idx]))
-                    psnrs.append(psnr(renders[idx], gts[idx]))
-                    l1s.append(l1_loss(renders[idx], gts[idx]).item())
-                    r_lpips = renders[idx][:, vis_ch, :, :] if img_channels > 3 else renders[idx]
-                    g_lpips = gts[idx][:, vis_ch, :, :] if img_channels > 3 else gts[idx]
+                    render_eval, gt_eval, active_channels = select_active_channels(renders[idx], gts[idx], image_names[idx], active_by_name)
+                    ssims.append(ssim(render_eval, gt_eval))
+                    psnrs.append(psnr(render_eval, gt_eval))
+                    l1s.append(l1_loss(render_eval, gt_eval).item())
+                    r_lpips, g_lpips = lpips_inputs(render_eval, gt_eval)
                     lpipss.append(compute_lpips(r_lpips, g_lpips))
 
                     if single_channel_mode:
-                        for ch in range(eval_num_ch):
+                        for ch in active_channels:
+                            if ch >= eval_num_ch:
+                                continue
                             r_ch = renders[idx][:, ch:ch+1, :, :]
                             g_ch = gts[idx][:, ch:ch+1, :, :]
                             ch_ssims[ch].append(ssim(r_ch, g_ch))
@@ -163,14 +203,18 @@ def evaluate(model_paths):
                 if single_channel_mode:
                     print(f"  [Per-channel] ({eval_num_ch} channels)")
                     macro_ssim, macro_psnr, macro_lpips, macro_l1 = 0.0, 0.0, 0.0, 0.0
+                    valid_macro_channels = []
                     for ch in range(eval_num_ch):
+                        if len(ch_ssims[ch]) == 0:
+                            continue
                         cn = channel_names.get(ch, f'B{ch}')
                         s = torch.tensor(ch_ssims[ch]).mean().item()
                         p = torch.tensor(ch_psnrs[ch]).mean().item()
                         lp = torch.tensor(ch_lpipss[ch]).mean().item()
                         l = torch.tensor(ch_l1s[ch]).mean().item()
                         macro_ssim += s; macro_psnr += p; macro_lpips += lp; macro_l1 += l
-                        print(f"    {cn}: SSIM={s:.7f}  PSNR={p:.7f}  LPIPS={lp:.7f}  L1={l:.7f}")
+                        valid_macro_channels.append(ch)
+                        print(f"    {cn}: n={len(ch_ssims[ch])}  SSIM={s:.7f}  PSNR={p:.7f}  LPIPS={lp:.7f}  L1={l:.7f}")
 
                         full_dict[scene_dir][method][f"ch_{cn}_SSIM"] = s
                         full_dict[scene_dir][method][f"ch_{cn}_PSNR"] = p
@@ -181,8 +225,9 @@ def evaluate(model_paths):
                         per_view_dict[scene_dir][method][f"ch_{cn}_LPIPS"] = {name: v for v, name in zip(torch.tensor(ch_lpipss[ch]).tolist(), image_names)}
                         per_view_dict[scene_dir][method][f"ch_{cn}_L1"] = {name: v for v, name in zip(ch_l1s[ch], image_names)}
 
-                    macro_ssim /= eval_num_ch; macro_psnr /= eval_num_ch
-                    macro_lpips /= eval_num_ch; macro_l1 /= eval_num_ch
+                    macro_denom = max(1, len(valid_macro_channels))
+                    macro_ssim /= macro_denom; macro_psnr /= macro_denom
+                    macro_lpips /= macro_denom; macro_l1 /= macro_denom
                     print(f"    Macro-avg: SSIM={macro_ssim:.7f}  PSNR={macro_psnr:.7f}  LPIPS={macro_lpips:.7f}  L1={macro_l1:.7f}")
                     full_dict[scene_dir][method]["macro_SSIM"] = macro_ssim
                     full_dict[scene_dir][method]["macro_PSNR"] = macro_psnr

@@ -7,8 +7,6 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 
 import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="3"
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim, loss_cls_3d
@@ -24,6 +22,37 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from utils.color_decoder import ColorDecoder
 import wandb
 import json
+import shutil
+
+
+def active_channel_loss_tensors(rendered, target, viewpoint_cam):
+    active_channels = getattr(viewpoint_cam, "active_channels", None)
+    if active_channels is None or len(active_channels) == 0:
+        return rendered, target
+    active_channels = active_channels.to(rendered.device).long()
+    active_channels = active_channels[(active_channels >= 0) & (active_channels < rendered.shape[0])]
+    if active_channels.numel() == 0:
+        return rendered, target
+    return rendered.index_select(0, active_channels), target.index_select(0, active_channels)
+
+
+def copy_label_metadata(source_path, model_path):
+    metadata_dir = os.path.join(source_path, "metadata")
+    if not os.path.isdir(metadata_dir):
+        return
+    os.makedirs(model_path, exist_ok=True)
+    for name in [
+        "class_map.json",
+        "class_colors.json",
+        "instance_label_map.json",
+        "instance_tracking_report.json",
+        "mask_alignment_report.json",
+        "active_channels.json",
+        "registered_images_summary.json",
+    ]:
+        src = os.path.join(metadata_dir, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(model_path, name))
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb):
     first_iter = 0
@@ -128,24 +157,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, color_decoder=color_decoder)
         image, viewspace_point_tensor, visibility_filter, radii, objects = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["render_object"]
 
-        # Object Loss
-        gt_obj = viewpoint_cam.objects.cuda().long()
-        logits = classifier(objects)
-        loss_obj = cls_criterion(logits.unsqueeze(0), gt_obj.unsqueeze(0)).squeeze().mean()
-        loss_obj = loss_obj / torch.log(torch.tensor(num_classes))  # normalize to (0,1)
+        # Object/semantic loss is applied only to views that actually have labels.
+        if viewpoint_cam.objects is not None:
+            gt_obj = viewpoint_cam.objects.cuda().long()
+            logits = classifier(objects)
+            loss_obj = cls_criterion(logits.unsqueeze(0), gt_obj.unsqueeze(0)).squeeze().mean()
+            loss_obj = loss_obj / torch.log(torch.tensor(num_classes, device=loss_obj.device))  # normalize to (0,1)
+        else:
+            loss_obj = image.sum() * 0.0
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        image_loss, gt_loss = active_channel_loss_tensors(image, gt_image, viewpoint_cam)
 
         if single_channel_mode:
-            ch = randint(0, num_channels - 1)
+            active_channels = getattr(viewpoint_cam, "active_channels", None)
+            if active_channels is not None and len(active_channels) > 0:
+                active_list = active_channels.tolist()
+                ch = active_list[randint(0, len(active_list) - 1)]
+            else:
+                ch = randint(0, num_channels - 1)
             image_ch = image[ch:ch+1]
             gt_ch = gt_image[ch:ch+1]
             Ll1 = l1_loss(image_ch, gt_ch)
             ssim_val = ssim(image_ch, gt_ch)
         else:
-            Ll1 = l1_loss(image, gt_image)
-            ssim_val = ssim(image, gt_image)
+            Ll1 = l1_loss(image_loss, gt_loss)
+            ssim_val = ssim(image_loss, gt_loss)
 
         loss_obj_3d = None
         if iteration % opt.reg3d_interval == 0:
@@ -254,6 +292,7 @@ def prepare_output_and_logger(args):
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
+    copy_label_metadata(args.source_path, args.model_path)
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
@@ -282,6 +321,7 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
                 per_ch_l1 = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
                 per_ch_psnr = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
                 per_ch_ssim_acc = {ch: 0.0 for ch in range(num_channels)} if single_channel_mode else {}
+                per_ch_counts = {ch: 0 for ch in range(num_channels)} if single_channel_mode else {}
 
                 for idx, viewpoint in enumerate(config['cameras']):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, color_decoder=color_decoder)["render"], 0.0, 1.0)
@@ -292,16 +332,20 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
                             if iteration == testing_iterations[0]:
                                 wandb.log({config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name): [wandb.Image(gt_image)]})
 
-                    l1_test += l1_loss(image, gt_image).mean().double()
-                    psnr_test += psnr(image, gt_image).mean().double()
+                    image_eval, gt_eval = active_channel_loss_tensors(image, gt_image, viewpoint)
+                    l1_test += l1_loss(image_eval, gt_eval).mean().double()
+                    psnr_test += psnr(image_eval, gt_eval).mean().double()
 
                     if single_channel_mode:
-                        for ch in range(num_channels):
+                        active_channels = getattr(viewpoint, "active_channels", None)
+                        active_iter = active_channels.tolist() if active_channels is not None and len(active_channels) > 0 else list(range(num_channels))
+                        for ch in active_iter:
                             img_ch = image[ch:ch+1]
                             gt_ch = gt_image[ch:ch+1]
                             per_ch_l1[ch] += l1_loss(img_ch, gt_ch).mean().double()
                             per_ch_psnr[ch] += psnr(img_ch, gt_ch).mean().double()
                             per_ch_ssim_acc[ch] += ssim(img_ch, gt_ch).double()
+                            per_ch_counts[ch] += 1
 
                 n_cams = len(config['cameras'])
                 psnr_test /= n_cams
@@ -310,13 +354,16 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
 
                 if single_channel_mode:
                     for ch in range(num_channels):
-                        per_ch_l1[ch] /= n_cams
-                        per_ch_psnr[ch] /= n_cams
-                        per_ch_ssim_acc[ch] /= n_cams
-                    macro_l1 = sum(per_ch_l1.values()) / num_channels
-                    macro_psnr = sum(per_ch_psnr.values()) / num_channels
-                    macro_ssim = sum(per_ch_ssim_acc.values()) / num_channels
-                    parts = " | ".join(f"{channel_names[ch]}: L1={per_ch_l1[ch]:.5f} PSNR={per_ch_psnr[ch]:.2f} SSIM={per_ch_ssim_acc[ch]:.4f}" for ch in range(num_channels))
+                        if per_ch_counts[ch] > 0:
+                            per_ch_l1[ch] /= per_ch_counts[ch]
+                            per_ch_psnr[ch] /= per_ch_counts[ch]
+                            per_ch_ssim_acc[ch] /= per_ch_counts[ch]
+                    valid_channels = [ch for ch in range(num_channels) if per_ch_counts[ch] > 0]
+                    denom = max(1, len(valid_channels))
+                    macro_l1 = sum(per_ch_l1[ch] for ch in valid_channels) / denom
+                    macro_psnr = sum(per_ch_psnr[ch] for ch in valid_channels) / denom
+                    macro_ssim = sum(per_ch_ssim_acc[ch] for ch in valid_channels) / denom
+                    parts = " | ".join(f"{channel_names[ch]}: n={per_ch_counts[ch]} L1={per_ch_l1[ch]:.5f} PSNR={per_ch_psnr[ch]:.2f} SSIM={per_ch_ssim_acc[ch]:.4f}" for ch in valid_channels)
                     print(f"  Per-channel [{config['name']}]: {parts}")
                     print(f"  Macro-avg   [{config['name']}]: L1={macro_l1:.5f} PSNR={macro_psnr:.2f} SSIM={macro_ssim:.4f}")
 

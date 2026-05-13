@@ -33,6 +33,7 @@ class CameraInfo(NamedTuple):
     height: int
     objects: np.array
     multispectral_path: str = None
+    active_channels: tuple = None
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -64,7 +65,50 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder, multispectral_folder=None):
+def _infer_active_channels(image_name):
+    if image_name.startswith("rgb"):
+        return (0, 1, 2)
+    band_to_channel = {
+        "b470": 3,
+        "b505": 4,
+        "b525": 5,
+        "b590": 6,
+        "b635": 7,
+        "b660": 8,
+        "b850": 9,
+    }
+    prefix = image_name.split("_", 1)[0]
+    if prefix in band_to_channel:
+        return (band_to_channel[prefix],)
+    return None
+
+
+def _load_active_channel_map(scene_path):
+    candidates = [
+        os.path.join(scene_path, "metadata", "active_channels.json"),
+        os.path.join(scene_path, "frame_info.json"),
+        os.path.join(scene_path, "band_info.json"),
+    ]
+    active = {}
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception as exc:
+            print(f"Warning: could not read active-channel metadata {path}: {exc}")
+            continue
+        for name, value in data.items():
+            stem = Path(name).stem
+            channels = value.get("channels") if isinstance(value, dict) else value
+            if channels is None:
+                continue
+            active[stem] = tuple(int(c) for c in channels)
+    return active
+
+
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder, multispectral_folder=None, active_channel_map=None):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -97,6 +141,11 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_fol
         image = Image.open(image_path) if os.path.exists(image_path) else None
         object_path = os.path.join(objects_folder, image_name + '.png')
         objects = Image.open(object_path) if os.path.exists(object_path) else None
+        active_channels = None
+        if active_channel_map is not None:
+            active_channels = active_channel_map.get(image_name)
+        if active_channels is None:
+            active_channels = _infer_active_channels(image_name)
 
         ms_path = None
         if multispectral_folder is not None:
@@ -106,7 +155,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_fol
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height,
-                              objects=objects, multispectral_path=ms_path)
+                              objects=objects, multispectral_path=ms_path, active_channels=active_channels)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -152,12 +201,16 @@ def readColmapSceneInfo(path, images, eval, object_path, llffhold=8, n_views=100
     object_dir = 'object_mask' if object_path == None else object_path
     multispectral_dir = os.path.join(path, "images_multispectral")
     ms_folder = multispectral_dir if os.path.isdir(multispectral_dir) else None
+    active_channel_map = _load_active_channel_map(path)
+    if active_channel_map:
+        print(f"Found active-channel metadata for {len(active_channel_map)} images")
     if ms_folder:
         print(f"Found multispectral images at {ms_folder}")
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
                                            images_folder=os.path.join(path, reading_dir),
                                            objects_folder=os.path.join(path, object_dir),
-                                           multispectral_folder=ms_folder)
+                                           multispectral_folder=ms_folder,
+                                           active_channel_map=active_channel_map)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     def split_by_index(all_cam_infos):

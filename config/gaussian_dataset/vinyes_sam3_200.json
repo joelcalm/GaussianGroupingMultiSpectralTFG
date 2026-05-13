@@ -1,0 +1,20 @@
+{
+    "densify_until_iter": 6000,
+    "densify_grad_threshold": 5e-05,
+    "num_classes": 348,
+    "num_objects": 16,
+    "max_num_points": 1000000,
+    "reg3d_interval": 5,
+    "reg3d_k": 5,
+    "reg3d_lambda_val": 2,
+    "reg3d_max_points": 150000,
+    "reg3d_sample_size": 500,
+    "use_color_embed": true,
+    "color_embed_dim": 32,
+    "color_decoder_hidden_dim": 128,
+    "color_decoder_num_hidden_layers": 3,
+    "color_decoder_lr": 0.001,
+    "num_channels": 10,
+    "single_channel_mode": false,
+    "label_mode": "instance"
+}

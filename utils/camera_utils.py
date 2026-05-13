@@ -122,6 +122,32 @@ def _resize_multispectral(ms_array, resolution):
     return ndimage_zoom(ms_array, (scale_h, scale_w, 1), order=1)
 
 
+def _expand_active_channels(image_tensor, active_channels, num_channels):
+    """Place a loaded RGB or single-band tensor into the full channel tensor."""
+    if active_channels is None:
+        if image_tensor.shape[0] == num_channels:
+            return image_tensor, list(range(num_channels))
+        active_channels = list(range(min(image_tensor.shape[0], num_channels)))
+    else:
+        active_channels = [int(c) for c in active_channels]
+
+    if image_tensor.shape[0] == num_channels and active_channels == list(range(num_channels)):
+        return image_tensor, active_channels
+
+    expanded = torch.zeros((num_channels, image_tensor.shape[1], image_tensor.shape[2]), dtype=image_tensor.dtype)
+    if len(active_channels) == image_tensor.shape[0]:
+        source = image_tensor
+    elif len(active_channels) == 1:
+        source = image_tensor[:1]
+    else:
+        source = image_tensor[:len(active_channels)]
+
+    for src_idx, dst_idx in enumerate(active_channels[:source.shape[0]]):
+        if 0 <= dst_idx < num_channels:
+            expanded[dst_idx] = source[src_idx]
+    return expanded, active_channels
+
+
 def loadCam(args, id, cam_info, resolution_scale, **kwargs):
     orig_w, orig_h = cam_info.image.size
 
@@ -145,14 +171,18 @@ def loadCam(args, id, cam_info, resolution_scale, **kwargs):
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
     ms_path = getattr(cam_info, 'multispectral_path', None)
+    active_channels = getattr(cam_info, 'active_channels', None)
+    num_channels = int(getattr(args, 'num_channels', 3))
     if ms_path is not None:
         ms_array = np.load(ms_path)  # [H, W, C] float32 in [0, 1]
         ms_array = _resize_multispectral(ms_array, resolution)
         gt_image = torch.from_numpy(ms_array).permute(2, 0, 1).float()  # [C, H, W]
+        gt_image, active_channels = _expand_active_channels(gt_image, active_channels, num_channels)
         loaded_mask = None
     else:
         resized_image_rgb = PILtoTorch(cam_info.image, resolution)
         gt_image = resized_image_rgb[:3, ...]
+        gt_image, active_channels = _expand_active_channels(gt_image, active_channels, num_channels)
         loaded_mask = None
         if resized_image_rgb.shape[0] == 4:
             loaded_mask = resized_image_rgb[3:4, ...]
@@ -170,7 +200,7 @@ def loadCam(args, id, cam_info, resolution_scale, **kwargs):
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device,
                   objects=objects_tensor,
-                  channel_idx=channel_idx)
+                  channel_idx=channel_idx, active_channels=active_channels)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args, single_channel_mode=False, num_channels=3, object_id_mapping=None):
     camera_list = []
