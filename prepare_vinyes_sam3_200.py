@@ -47,6 +47,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--copy", dest="link", action="store_false", help="Copy source image/sparse folders instead of symlinking them.")
     parser.add_argument("--instance_min_area", type=int, default=15000)
     parser.add_argument("--instance_iou_threshold", type=float, default=0.10)
+    parser.add_argument(
+        "--instance_classes",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional semantic class names to keep as per-object SAM3 track IDs. "
+            "Other tracked pixels are folded back to their semantic class IDs."
+        ),
+    )
     parser.add_argument("--max_overlay_frames", type=int, default=12)
     parser.add_argument("--config_out", type=Path, default=Path("config/gaussian_dataset/vinyes_sam3_200.json"))
     return parser.parse_args()
@@ -136,6 +145,14 @@ def semantic_mask_path(sam3_dir: Path, image_name: str) -> Path | None:
     return None
 
 
+def instance_mask_path(sam3_dir: Path, image_name: str) -> Path | None:
+    stem = Path(image_name).stem
+    indexed = sam3_dir / "semantic_instance_masks" / f"{stem}.png"
+    if indexed.exists():
+        return indexed
+    return None
+
+
 def color_to_index_mask(path: Path, colors: dict[int, tuple[int, int, int]]) -> np.ndarray:
     arr = np.array(Image.open(path))
     if arr.ndim == 2:
@@ -155,6 +172,80 @@ def save_label_png(arr: np.ndarray, path: Path) -> None:
         Image.fromarray(arr.astype(np.uint16), mode="I;16").save(path)
     else:
         Image.fromarray(arr.astype(np.uint8), mode="L").save(path)
+
+
+def load_instance_label_map(sam3_dir: Path) -> dict[str, dict] | None:
+    path = sam3_dir / "metadata" / "instance_label_map.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def compact_tracked_instance_masks(
+    tracked_instance_items,
+    object_dir: Path,
+    sam3_instance_map: dict[str, dict],
+    class_map: dict[str, int],
+    keep_instance_classes: set[str],
+):
+    class_entries = {
+        str(class_id): {
+            "class_id": int(class_id),
+            "class_name": class_name,
+            "label": class_name,
+            "source": "semantic_class",
+        }
+        for class_name, class_id in sorted(class_map.items(), key=lambda item: item[1])
+    }
+    next_id = max(int(v) for v in class_map.values()) + 1
+    remap = {0: 0}
+    compact_map = class_entries.copy()
+    kept_by_class = Counter()
+    folded_by_class = Counter()
+
+    for raw_id_str, entry in sorted(sam3_instance_map.items(), key=lambda item: int(item[0])):
+        raw_id = int(raw_id_str)
+        if raw_id == 0:
+            continue
+        class_name = entry.get("class_name", "")
+        class_id = int(entry.get("class_id", class_map.get(class_name, 0)))
+        if class_name in keep_instance_classes:
+            compact_id = next_id
+            next_id += 1
+            remap[raw_id] = compact_id
+            kept_by_class[class_name] += 1
+            compact_entry = dict(entry)
+            compact_entry.update({
+                "class_id": class_id,
+                "class_name": class_name,
+                "source_sam3_instance_id": raw_id,
+                "source": entry.get("source", "sam3_video_tracker"),
+            })
+            compact_map[str(compact_id)] = compact_entry
+        else:
+            remap[raw_id] = class_id
+            folded_by_class[class_name] += 1
+
+    lut = np.zeros(max(remap.keys()) + 1, dtype=np.uint16)
+    for raw_id, compact_id in remap.items():
+        lut[raw_id] = compact_id
+
+    for image_name, path in tracked_instance_items:
+        inst = np.array(Image.open(path))
+        if inst.max(initial=0) >= len(lut):
+            raise ValueError(f"{path} contains an instance id outside the SAM3 label map")
+        save_label_png(lut[inst], object_dir / image_name)
+
+    report = {
+        "source": "sam3_video_tracker_compact",
+        "keep_instance_classes": sorted(keep_instance_classes),
+        "kept_instances_by_class": dict(sorted(kept_by_class.items())),
+        "folded_tracks_by_class": dict(sorted(folded_by_class.items())),
+        "num_rgb_instance_masks_aligned": len(tracked_instance_items),
+        "raw_num_instances": len(sam3_instance_map) - 1,
+        "compact_num_classes": max(int(k) for k in compact_map.keys()) + 1,
+    }
+    return compact_map, report
 
 
 def connected_components(mask: np.ndarray):
@@ -311,6 +402,10 @@ def main() -> None:
     class_map = load_class_map(sam3_dir)
     class_id_to_name = {int(v): k for k, v in class_map.items()}
     class_colors = load_class_colors(sam3_dir, class_map)
+    keep_instance_classes = set(args.instance_classes or [])
+    unknown_instance_classes = sorted(keep_instance_classes - set(class_map.keys()))
+    if unknown_instance_classes:
+        raise ValueError(f"Unknown --instance_classes values: {unknown_instance_classes}")
     registered = read_registered_images(output_scene / "sparse" / "0" / "images.txt")
     registered_stems = {Path(name).stem for name in registered}
 
@@ -318,22 +413,29 @@ def main() -> None:
     summary = Counter()
     alignment_rows = []
     semantic_items = []
+    tracked_instance_items = []
     semantic_dir = output_scene / "semantic_mask"
     semantic_dir.mkdir(parents=True, exist_ok=True)
+    tracked_instance_dir = output_scene / "sam3_instance_mask"
+    tracked_instance_dir.mkdir(parents=True, exist_ok=True)
 
     for image_name in registered:
         stem = Path(image_name).stem
         channels = active_channels_for(stem)
         active_channels[stem] = channels
         summary[band_key(stem)] += 1
-        mask_path = semantic_mask_path(sam3_dir, image_name) if band_key(stem) == "rgbp" else None
+        is_rgb = band_key(stem) == "rgbp"
+        mask_path = semantic_mask_path(sam3_dir, image_name) if is_rgb else None
+        tracked_instance_path = instance_mask_path(sam3_dir, image_name) if is_rgb else None
         row = {
             "image_name": image_name,
             "band": band_key(stem),
             "registered": True,
             "active_channels": " ".join(str(c) for c in channels),
             "has_sam3_mask": mask_path is not None,
+            "has_sam3_instance_mask": tracked_instance_path is not None,
             "mask_source": str(mask_path) if mask_path else "",
+            "instance_mask_source": str(tracked_instance_path) if tracked_instance_path else "",
             "dimension_match": "",
             "warning": "",
         }
@@ -348,6 +450,15 @@ def main() -> None:
             out_mask = semantic_dir / image_name
             save_label_png(mask, out_mask)
             semantic_items.append((image_name, out_mask))
+        if tracked_instance_path is not None:
+            inst = np.array(Image.open(tracked_instance_path))
+            image_size = Image.open(output_scene / "images" / image_name).size
+            if inst.shape[::-1] != image_size:
+                row["dimension_match"] = False
+                row["warning"] = f"instance mask size {inst.shape[::-1]} != image size {image_size}"
+            out_inst = tracked_instance_dir / image_name
+            save_label_png(inst, out_inst)
+            tracked_instance_items.append((image_name, out_inst))
         alignment_rows.append(row)
 
     all_sam_masks = {
@@ -362,7 +473,9 @@ def main() -> None:
             "registered": False,
             "active_channels": "",
             "has_sam3_mask": True,
+            "has_sam3_instance_mask": False,
             "mask_source": "SAM3 mask not present in COLMAP registered image list",
+            "instance_mask_source": "",
             "dimension_match": "",
             "warning": "mask_without_registered_colmap_image",
         })
@@ -375,23 +488,48 @@ def main() -> None:
     object_dir.mkdir(parents=True, exist_ok=True)
 
     if args.label_mode == "instance":
-        instance_map, instance_rows = build_instance_masks(
-            semantic_items,
-            object_dir,
-            class_id_to_name,
-            min_area=args.instance_min_area,
-            iou_threshold=args.instance_iou_threshold,
-        )
-        num_classes = max(int(k) for k in instance_map.keys()) + 1
-        (metadata_dir / "instance_label_map.json").write_text(json.dumps(instance_map, indent=2))
-        (metadata_dir / "instance_tracking_report.json").write_text(json.dumps({
-            "source": "semantic_index_masks_connected_components",
-            "warning": "Weak pixel-space association; use true SAM3 track IDs if available later.",
-            "min_area": args.instance_min_area,
-            "iou_threshold": args.instance_iou_threshold,
-            "num_instances": num_classes - 1,
-            "frames": instance_rows,
-        }, indent=2))
+        sam3_instance_map = load_instance_label_map(sam3_dir)
+        if sam3_instance_map is not None and tracked_instance_items:
+            if args.instance_classes is None:
+                for image_name, path in tracked_instance_items:
+                    shutil.copy2(path, object_dir / image_name)
+                instance_map = sam3_instance_map
+                report_path = sam3_dir / "metadata" / "instance_tracking_report.json"
+                report = json.loads(report_path.read_text()) if report_path.exists() else {}
+                report.update({
+                    "source": "sam3_video_tracker",
+                    "num_rgb_instance_masks_aligned": len(tracked_instance_items),
+                    "raw_num_instances": len(instance_map) - 1,
+                })
+            else:
+                instance_map, report = compact_tracked_instance_masks(
+                    tracked_instance_items,
+                    object_dir,
+                    sam3_instance_map,
+                    class_map,
+                    keep_instance_classes,
+                )
+            num_classes = max(int(k) for k in instance_map.keys()) + 1
+            (metadata_dir / "instance_label_map.json").write_text(json.dumps(instance_map, indent=2))
+            (metadata_dir / "instance_tracking_report.json").write_text(json.dumps(report, indent=2))
+        else:
+            instance_map, instance_rows = build_instance_masks(
+                semantic_items,
+                object_dir,
+                class_id_to_name,
+                min_area=args.instance_min_area,
+                iou_threshold=args.instance_iou_threshold,
+            )
+            num_classes = max(int(k) for k in instance_map.keys()) + 1
+            (metadata_dir / "instance_label_map.json").write_text(json.dumps(instance_map, indent=2))
+            (metadata_dir / "instance_tracking_report.json").write_text(json.dumps({
+                "source": "semantic_index_masks_connected_components",
+                "warning": "Weak pixel-space association; SAM3 semantic_instance_masks were unavailable.",
+                "min_area": args.instance_min_area,
+                "iou_threshold": args.instance_iou_threshold,
+                "num_instances": num_classes - 1,
+                "frames": instance_rows,
+            }, indent=2))
     else:
         for image_name, path in semantic_items:
             shutil.copy2(path, object_dir / image_name)
@@ -405,10 +543,12 @@ def main() -> None:
         "source_scene": str(source_scene),
         "sam3_dir": str(sam3_dir),
         "label_mode": args.label_mode,
+        "instance_classes": sorted(keep_instance_classes) if args.instance_classes is not None else None,
         "num_registered_images": len(registered),
         "registered_per_band": dict(sorted(summary.items())),
         "num_rgb_registered": summary.get("rgbp", 0),
         "num_rgb_masks_aligned": len(semantic_items),
+        "num_rgb_instance_masks_aligned": len(tracked_instance_items),
         "num_sam3_masks_not_registered": len(missing_registered),
         "channels": BAND_CHANNELS,
     }, indent=2))

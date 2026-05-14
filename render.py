@@ -25,6 +25,13 @@ from sklearn.decomposition import PCA
 from utils.color_decoder import ColorDecoder
 import json
 
+def clear_pngs(path):
+    if not os.path.isdir(path):
+        return
+    for name in os.listdir(path):
+        if name.endswith(".png"):
+            os.remove(os.path.join(path, name))
+
 def feature_to_rgb(features):
     # Input features shape: (16, H, W)
     
@@ -93,9 +100,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         for ch_id, ch_name in channel_names.items():
             p = os.path.join(model_path, name, "ours_{}".format(iteration), f"channel_{ch_name}")
             makedirs(p, exist_ok=True)
+            clear_pngs(p)
             channel_paths[ch_id] = p
 
     frames_index = []
+    channel_frames_index = {int(ch_id): [] for ch_id in channel_paths}
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         results = render(view, gaussians, pipeline, background, color_decoder=color_decoder)
         rendering = results["render"]
@@ -118,6 +127,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         gt = view.original_image[:num_channels, :, :]
         active_channels = getattr(view, "active_channels", None)
         active_channels = active_channels.tolist() if active_channels is not None else list(range(gt.shape[0]))
+        active_channels = sorted({int(c) for c in active_channels if 0 <= int(c) < gt.shape[0]})
+        active_channel_set = set(active_channels)
         frames_index.append({
             "index": idx,
             "file_stem": "{0:05d}".format(idx),
@@ -127,7 +138,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         })
 
         if num_channels > 3:
-            vis_ch = [0, 3, 6] if num_channels >= 7 else list(range(min(3, num_channels)))
+            vis_ch = [0, 1, 2] if num_channels >= 3 else list(range(min(3, num_channels)))
             render_vis = rendering[vis_ch]
             gt_vis = gt[vis_ch]
             torchvision.utils.save_image(render_vis, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
@@ -140,13 +151,23 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
         if single_channel_mode or num_channels > 3:
             for ch_id, ch_path in channel_paths.items():
+                if ch_id not in active_channel_set:
+                    continue
                 ch_render = rendering[ch_id:ch_id+1].expand(3, -1, -1)
                 ch_gt = gt[ch_id:ch_id+1].expand(3, -1, -1)
                 ch_combined = torch.cat([ch_render, ch_gt], dim=2)
                 torchvision.utils.save_image(ch_combined, os.path.join(ch_path, '{0:05d}'.format(idx) + ".png"))
+                channel_frames_index[int(ch_id)].append({
+                    "index": idx,
+                    "file_stem": "{0:05d}".format(idx),
+                    "image_name": view.image_name,
+                })
 
     with open(os.path.join(model_path, name, "ours_{}".format(iteration), "frames_index.json"), "w") as f:
         json.dump(frames_index, f, indent=2)
+    if channel_paths:
+        with open(os.path.join(model_path, name, "ours_{}".format(iteration), "channel_frames_index.json"), "w") as f:
+            json.dump(channel_frames_index, f, indent=2)
 
     out_path = os.path.join(render_path[:-8],'concat')
     makedirs(out_path,exist_ok=True)
