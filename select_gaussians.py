@@ -113,6 +113,30 @@ def load_metadata(model_path):
     return class_name_to_id, class_id_to_name, instance_map
 
 
+def find_default_merge_map(model_path, iteration):
+    iteration = find_iteration(model_path, iteration)
+    path = Path(model_path) / "vine_tracklet_merges" / f"iteration_{iteration}" / "vine_tracklet_merge_map.json"
+    return path if path.exists() else None
+
+
+def load_physical_vine_map(model_path, iteration, merge_map_path=None):
+    path = Path(merge_map_path) if merge_map_path else find_default_merge_map(model_path, iteration)
+    if path is None or not path.exists():
+        return {}, None
+    data = load_json(path, {})
+    out = {}
+    for row in data.get("physical_vines", []):
+        physical_id = int(row["physical_vine_id"])
+        out[physical_id] = {
+            "physical_vine_id": physical_id,
+            "label": f"physical_vine_{physical_id:04d}",
+            "member_instance_ids": [int(v) for v in row.get("member_instance_ids", [])],
+            "num_tracklets": int(row.get("num_tracklets", 0)),
+            "points": int(row.get("points", 0)),
+        }
+    return out, path
+
+
 def load_scene_data(model_path, iteration):
     iteration = find_iteration(model_path, iteration)
     iter_dir = Path(model_path) / "point_cloud" / f"iteration_{iteration}"
@@ -180,22 +204,27 @@ def normalize_class_name(name):
     return aliases.get(lowered, lowered)
 
 
-def selection_from_args(args, class_name_to_id, instance_map, pred_instance):
+def selection_from_args(args, class_name_to_id, instance_map, pred_instance, physical_vine_map=None):
+    physical_vine_map = physical_vine_map or {}
     class_names = [normalize_class_name(v) for v in split_values(args.class_name)]
     class_ids = set(parse_int_values(args.class_id))
     labels = {v.lower() for v in split_values(args.label)}
     instance_ids = set(parse_int_values(args.instance_id) + parse_int_values(args.object_id))
     object_indexes = parse_int_values(args.object_index)
+    physical_vine_ids = parse_int_values(getattr(args, "physical_vine_id", []))
 
     query = " ".join(split_values(args.query)).lower()
     if query:
-        if "vine" in query:
+        query_has_vine = re.search(r"\bvines?\b|vine_plant|physical_vine", query) is not None
+        numbers = [int(token) for token in re.findall(r"\b\d+\b", query)]
+        if query_has_vine:
             class_names.append("vine_plant")
-        for token in re.findall(r"\b\d+\b", query):
-            if class_names:
-                object_indexes.append(int(token))
+            if physical_vine_map and numbers:
+                physical_vine_ids.extend(numbers)
             else:
-                instance_ids.add(int(token))
+                object_indexes.extend(numbers)
+        else:
+            instance_ids.update(numbers)
 
     for name in class_names:
         if name not in class_name_to_id:
@@ -212,6 +241,14 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance):
         candidate_instances.append(inst_id)
 
     selected_instances = set(instance_ids)
+    selected_physical_vines = []
+    for physical_id in physical_vine_ids:
+        if physical_id not in physical_vine_map:
+            valid = ", ".join(str(v) for v in sorted(physical_vine_map))
+            raise ValueError(f"Unknown physical vine '{physical_id}'. Valid physical vine IDs: {valid}")
+        selected_instances.update(physical_vine_map[physical_id]["member_instance_ids"])
+        selected_physical_vines.append(physical_vine_map[physical_id])
+
     if object_indexes:
         if not candidate_instances:
             candidate_instances = sorted(int(v) for v in np.unique(pred_instance))
@@ -219,13 +256,13 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance):
             if object_index < 1 or object_index > len(candidate_instances):
                 raise ValueError(f"object-index {object_index} is outside 1..{len(candidate_instances)}")
             selected_instances.add(candidate_instances[object_index - 1])
-    elif class_ids or labels:
+    elif (class_ids or labels) and not selected_instances:
         selected_instances.update(candidate_instances)
 
     if not selected_instances:
         selected_instances.update(int(v) for v in np.unique(pred_instance))
 
-    return selected_instances
+    return selected_instances, selected_physical_vines
 
 
 def summarize_instances(pred_instance, instance_map):
@@ -268,6 +305,18 @@ def print_listing(rows):
                 f"  #{row['class_index']:03d}  instance_id={row['instance_id']:03d}  "
                 f"points={row['points']:7d}  label={row['label']}"
             )
+
+
+def print_physical_listing(physical_vine_map):
+    if not physical_vine_map:
+        return
+    print("physical_vines:")
+    for physical_id, row in sorted(physical_vine_map.items()):
+        members = ",".join(str(v) for v in row["member_instance_ids"])
+        print(
+            f"  vine {physical_id:03d}  tracklets={row['num_tracklets']:3d}  "
+            f"points={row['points']:7d}  instance_ids={members}"
+        )
 
 
 def colors_for_points(pred_instance, instance_map, mode, rgb):
@@ -376,14 +425,26 @@ onresize = draw; draw();
 def export_selection(args):
     class_name_to_id, class_id_to_name, instance_map = load_metadata(args.model_path)
     data = load_scene_data(args.model_path, args.iteration)
+    physical_vine_map, physical_merge_path = load_physical_vine_map(
+        args.model_path,
+        data["iteration"],
+        getattr(args, "merge_map", None),
+    )
     rows = summarize_instances(data["pred_instance"], instance_map)
 
     if args.list:
         print_listing(rows)
+        print_physical_listing(physical_vine_map)
         if not args.export:
             return None
 
-    selected_instances = selection_from_args(args, class_name_to_id, instance_map, data["pred_instance"])
+    selected_instances, selected_physical_vines = selection_from_args(
+        args,
+        class_name_to_id,
+        instance_map,
+        data["pred_instance"],
+        physical_vine_map,
+    )
     mask = np.isin(data["pred_instance"], np.array(sorted(selected_instances), dtype=np.int32))
     if args.min_opacity > 0:
         mask &= data["opacity"] >= args.min_opacity
@@ -394,6 +455,8 @@ def export_selection(args):
     selected_rows = [row for row in rows if row["instance_id"] in selected_instances]
     if args.output_name:
         name = sanitize_name(args.output_name)
+    elif len(selected_physical_vines) == 1:
+        name = sanitize_name(selected_physical_vines[0]["label"])
     elif selected_rows:
         classes = sorted({row["class_name"] for row in selected_rows})
         name = sanitize_name("_".join(classes[:3]))
@@ -426,6 +489,8 @@ def export_selection(args):
         "model_path": str(args.model_path),
         "iteration": data["iteration"],
         "selected_instances": sorted(int(v) for v in selected_instances),
+        "selected_physical_vines": selected_physical_vines,
+        "physical_merge_map": str(physical_merge_path) if physical_merge_path else None,
         "selected_points": int(mask.sum()),
         "total_points": int(mask.shape[0]),
         "min_opacity": args.min_opacity,
@@ -457,14 +522,17 @@ def launch_app(args):
 
     class_name_to_id, class_id_to_name, instance_map = load_metadata(args.model_path)
     data = load_scene_data(args.model_path, args.iteration)
+    physical_vine_map, physical_merge_path = load_physical_vine_map(args.model_path, data["iteration"], args.merge_map)
     rows = summarize_instances(data["pred_instance"], instance_map)
     class_names = sorted({row["class_name"] for row in rows})
     labels = [row["label"] for row in rows]
+    physical_labels = [f"vine {pid}" for pid in sorted(physical_vine_map)]
 
-    def run(class_name, label, instance_ids, object_indexes, color_by, min_opacity):
+    def run(class_name, label, physical_vines, instance_ids, object_indexes, color_by, min_opacity):
         local_args = argparse.Namespace(**vars(args))
         local_args.class_name = class_name or []
         local_args.label = label or []
+        local_args.physical_vine_id = [v.split()[-1] for v in (physical_vines or [])]
         local_args.instance_id = [instance_ids] if instance_ids else []
         local_args.object_id = []
         local_args.object_index = [object_indexes] if object_indexes else []
@@ -481,6 +549,7 @@ def launch_app(args):
         with gr.Row():
             class_name = gr.Dropdown(class_names, multiselect=True, label="Classes")
             label = gr.Dropdown(labels, multiselect=True, label="Instance labels")
+            physical_vines = gr.Dropdown(physical_labels, multiselect=True, label="Physical vines")
         with gr.Row():
             instance_ids = gr.Textbox(label="Instance IDs, comma-separated")
             object_indexes = gr.Textbox(label="Class-local object indexes, comma-separated")
@@ -490,7 +559,7 @@ def launch_app(args):
         button = gr.Button("Export selection")
         summary = gr.Code(label="Summary", language="json")
         html_file = gr.File(label="HTML viewer")
-        button.click(run, [class_name, label, instance_ids, object_indexes, color_by, min_opacity], [summary, html_file])
+        button.click(run, [class_name, label, physical_vines, instance_ids, object_indexes, color_by, min_opacity], [summary, html_file])
 
     demo.launch(server_name=args.host, server_port=args.port)
 
@@ -504,6 +573,8 @@ def build_parser():
     parser.add_argument("--label", nargs="*", default=[], help="Instance labels, e.g. vine_plant_0013")
     parser.add_argument("--instance-id", nargs="*", default=[], help="Predicted instance IDs")
     parser.add_argument("--object-id", nargs="*", default=[], help="Alias for --instance-id")
+    parser.add_argument("--physical-vine-id", nargs="*", default=[], help="Physical vine IDs from vine_tracklet_merge_map.json")
+    parser.add_argument("--merge-map", default=None, help="Physical vine merge map. Defaults to model_path/vine_tracklet_merges/iteration_*/vine_tracklet_merge_map.json")
     parser.add_argument("--object-index", nargs="*", default=[], help="1-based index within the selected class, e.g. --class-name vine_plant --object-index 3")
     parser.add_argument("--query", nargs="*", default=[], help='Simple text query, e.g. "only show vines" or "vine 3"')
     parser.add_argument("--min-opacity", type=float, default=0.0)
