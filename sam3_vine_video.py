@@ -96,6 +96,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=Path, default=Path("sam3_video_vine_semantic"))
     parser.add_argument("--model", type=str, default="weights/sam3.pt")
     parser.add_argument(
+        "--class_config",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON with class_map, class_prompts, class_colors, and merge_order. "
+            "This lets scene-specific part labels reuse the same SAM3 runner."
+        ),
+    )
+    parser.add_argument(
+        "--save_class_outputs",
+        action="store_true",
+        help="Persist per-class binary and instance masks under class_binary_masks/ and class_instance_masks/.",
+    )
+    parser.add_argument(
         "--box",
         type=float,
         nargs=4,
@@ -104,7 +118,8 @@ def parse_args() -> argparse.Namespace:
         help="Optional initial-frame box prompt in original image pixels. Used only for vine_plant.",
     )
     parser.add_argument("--device", type=str, default="2")
-    parser.add_argument("--half", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--half", dest="half", action="store_true", default=True)
+    parser.add_argument("--no-half", dest="half", action="store_false")
     parser.add_argument("--imgsz", type=int, default=1024)
     parser.add_argument("--conf", type=float, default=CONF_THRESHOLD)
 
@@ -142,6 +157,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlay_alpha", type=float, default=0.45)
 
     return parser.parse_args()
+
+
+def load_class_config(path: Path) -> None:
+    """Load a scene-specific class/prompt config into the module globals."""
+    global CLASS_MAP, CLASS_PROMPTS, CLASS_COLORS, MERGE_ORDER
+
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+
+    class_map = data.get("class_map")
+    class_prompts = data.get("class_prompts")
+    merge_order = data.get("merge_order")
+    if not isinstance(class_map, dict) or not isinstance(class_prompts, dict):
+        raise ValueError(f"{path} must contain object fields 'class_map' and 'class_prompts'")
+    if not isinstance(merge_order, list):
+        merge_order = [name for name in class_map if name != "background"]
+
+    missing_prompts = [name for name in merge_order if name != "background" and name not in class_prompts]
+    if missing_prompts:
+        raise ValueError(f"{path} is missing prompts for classes: {missing_prompts}")
+
+    class_colors = data.get("class_colors", {})
+    normalized_colors = {}
+    for name, idx in class_map.items():
+        idx = int(idx)
+        raw = class_colors.get(str(idx), class_colors.get(name))
+        if raw is None:
+            raw = ((idx * 37) % 255, (idx * 67) % 255, (idx * 97) % 255)
+        if len(raw) != 3:
+            raise ValueError(f"Color for {name} must have 3 channels")
+        normalized_colors[idx] = tuple(int(v) for v in raw)
+
+    CLASS_MAP = {str(name): int(idx) for name, idx in class_map.items()}
+    CLASS_PROMPTS = {str(name): str(prompt) for name, prompt in class_prompts.items()}
+    CLASS_COLORS = normalized_colors
+    MERGE_ORDER = [str(name) for name in merge_order if str(name) != "background"]
 
 
 # ----------------------------
@@ -209,7 +260,78 @@ def make_video(image_paths: list[Path], video_path: Path, fps: float) -> None:
         writer.release()
 
 
+
+def install_torch_attention_compat() -> None:
+    """Provide torch.nn.attention for Ultralytics SAM3 on Torch 2.1."""
+    import sys
+    import types
+
+    try:
+        import torch.nn.attention  # type: ignore  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+
+    import torch
+
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and not hasattr(compiler, "is_dynamo_compiling"):
+        dynamo = getattr(torch, "_dynamo", None)
+        compiler.is_dynamo_compiling = getattr(dynamo, "is_compiling", lambda: False)
+
+    if not getattr(torch.Tensor, "_jcalm_tuple_any_compat", False):
+        original_tensor_any = torch.Tensor.any
+
+        def tuple_dim_any(self, dim=None, keepdim=False, *args, **kwargs):
+            if "dim" in kwargs:
+                dim = kwargs.pop("dim")
+            if "keepdim" in kwargs:
+                keepdim = kwargs.pop("keepdim")
+            if isinstance(dim, tuple):
+                result = self
+                ndim = result.dim()
+                dims = sorted({d if d >= 0 else d + ndim for d in dim})
+                if keepdim:
+                    for d in dims:
+                        result = original_tensor_any(result, d, True)
+                else:
+                    for d in reversed(dims):
+                        result = original_tensor_any(result, d, False)
+                return result
+            if dim is None:
+                return original_tensor_any(self, *args, **kwargs)
+            return original_tensor_any(self, dim, keepdim, *args, **kwargs)
+
+        torch.Tensor.any = tuple_dim_any
+        torch.Tensor._jcalm_tuple_any_compat = True
+
+    if not torch.cuda.is_available():
+        return
+
+    sdp_backend = getattr(torch.backends.cuda, "SDPBackend", None)
+    legacy_sdp_kernel = getattr(torch.backends.cuda, "sdp_kernel", None)
+    if sdp_backend is None or legacy_sdp_kernel is None:
+        return
+
+    def sdpa_kernel(backends):
+        if not isinstance(backends, (list, tuple, set)):
+            selected = {backends}
+        else:
+            selected = set(backends)
+        return legacy_sdp_kernel(
+            enable_flash=sdp_backend.FLASH_ATTENTION in selected,
+            enable_math=sdp_backend.MATH in selected,
+            enable_mem_efficient=sdp_backend.EFFICIENT_ATTENTION in selected,
+        )
+
+    attention_module = types.ModuleType("torch.nn.attention")
+    attention_module.SDPBackend = sdp_backend
+    attention_module.sdpa_kernel = sdpa_kernel
+    sys.modules["torch.nn.attention"] = attention_module
+
 def build_video_predictor(args: argparse.Namespace) -> Any:
+    install_torch_attention_compat()
+
     from ultralytics.models.sam import SAM3VideoSemanticPredictor
 
     return SAM3VideoSemanticPredictor(
@@ -487,6 +609,8 @@ def run_class_predictions(
     """
     vine_mask_dir = args.output_dir / "vine_binary_masks"
     vine_overlay_dir = args.output_dir / "vine_overlays"
+    saved_binary_root = args.output_dir / "class_binary_masks"
+    saved_instance_root = args.output_dir / "class_instance_masks"
 
     for class_name in MERGE_ORDER:
         prompt = CLASS_PROMPTS[class_name]
@@ -562,6 +686,10 @@ def run_class_predictions(
             temp_mask_path = temp_out_dir / f"{stem}.png"
             save_binary_mask(class_mask, temp_mask_path)
             save_instance_mask(instance_mask, temp_instance_dir / f"{stem}.png")
+
+            if args.save_class_outputs:
+                save_binary_mask(class_mask, saved_binary_root / class_name / f"{stem}.png")
+                save_instance_mask(instance_mask, saved_instance_root / class_name / f"{stem}.png")
 
             # Permanent outputs only for vine
             if class_name == "vine_plant":
@@ -641,6 +769,8 @@ def build_semantic_outputs(
 
 def main() -> None:
     args = parse_args()
+    if args.class_config is not None:
+        load_class_config(args.class_config)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_metadata(args.output_dir)
 

@@ -198,7 +198,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     writer.release()
 
 
-def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
+def filter_views(views, only_prefix=None, max_views=None):
+    if only_prefix:
+        prefixes = tuple(p.strip() for p in only_prefix.split(",") if p.strip())
+        views = [view for view in views if view.image_name.startswith(prefixes)]
+    if max_views is not None and max_views >= 0:
+        views = views[:max_views]
+    return views
+
+
+def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool,
+                only_prefix=None, max_train_views=None, max_test_views=None):
     with torch.no_grad():
         use_color_embed = dataset.use_color_embed if hasattr(dataset, 'use_color_embed') else False
         color_embed_dim = dataset.color_embed_dim if hasattr(dataset, 'color_embed_dim') else 16
@@ -236,11 +246,13 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, classifier, color_decoder,
+             train_views = filter_views(scene.getTrainCameras(), only_prefix, max_train_views)
+             render_set(dataset.model_path, "train", scene.loaded_iter, train_views, gaussians, pipeline, background, classifier, color_decoder,
                         single_channel_mode=single_channel_mode, num_channels=num_channels)
 
         if (not skip_test) and (len(scene.getTestCameras()) > 0):
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, classifier, color_decoder,
+             test_views = filter_views(scene.getTestCameras(), only_prefix, max_test_views)
+             render_set(dataset.model_path, "test", scene.loaded_iter, test_views, gaussians, pipeline, background, classifier, color_decoder,
                         single_channel_mode=single_channel_mode, num_channels=num_channels)
 
 if __name__ == "__main__":
@@ -251,6 +263,9 @@ if __name__ == "__main__":
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
+    parser.add_argument("--only_prefix", default=None, help="Optional comma-separated image-name prefixes to render, e.g. rgb or b470,b505.")
+    parser.add_argument("--max_train_views", default=None, type=int, help="Optional cap on rendered train views after filtering.")
+    parser.add_argument("--max_test_views", default=None, type=int, help="Optional cap on rendered test views after filtering.")
     parser.add_argument("--quiet", action="store_true")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
@@ -258,4 +273,13 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test)
+    render_sets(
+        model.extract(args),
+        args.iteration,
+        pipeline.extract(args),
+        args.skip_train,
+        args.skip_test,
+        only_prefix=getattr(args, "only_prefix", None),
+        max_train_views=getattr(args, "max_train_views", None),
+        max_test_views=getattr(args, "max_test_views", None),
+    )

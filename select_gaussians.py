@@ -102,11 +102,21 @@ def load_metadata(model_path):
         class_id = int(row.get("class_id", inst_id))
         class_name = str(row.get("class_name", class_id_to_name.get(class_id, class_id)))
         label = str(row.get("label", f"{class_name}_{inst_id:04d}"))
-        instance_map[inst_id] = {
+        item = dict(row)
+        item.update({
             "class_id": class_id,
             "class_name": class_name,
             "label": label,
-        }
+        })
+        if "instance_id" in item:
+            item["hier_instance_id"] = str(item["instance_id"])
+        if "instance_index" in item:
+            item["instance_index"] = int(item["instance_index"])
+        if "object_type" in item:
+            item["object_type"] = str(item["object_type"])
+        if "part_id" in item:
+            item["part_id"] = str(item["part_id"])
+        instance_map[inst_id] = item
         class_name_to_id.setdefault(class_name.lower(), class_id)
         class_id_to_name.setdefault(class_id, class_name)
 
@@ -194,6 +204,12 @@ def normalize_class_name(name):
         "vines": "vine_plant",
         "plant": "vine_plant",
         "plants": "vine_plant",
+        "leaf": "vine_leaf",
+        "leaves": "vine_leaf",
+        "trunk": "vine_trunk",
+        "trunks": "vine_trunk",
+        "wood": "vine_trunk",
+        "woody": "vine_trunk",
         "post": "wooden_post",
         "posts": "wooden_post",
         "wall": "stone_wall",
@@ -213,17 +229,48 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance, phy
     object_indexes = parse_int_values(args.object_index)
     physical_vine_ids = parse_int_values(getattr(args, "physical_vine_id", []))
 
+    object_types = {v.lower() for v in split_values(getattr(args, "object_type", []))}
+    part_ids = {v.lower() for v in split_values(getattr(args, "part_id", []))}
+    hier_instance_ids = {v.lower() for v in split_values(getattr(args, "hier_instance_id", []))}
+    hier_instance_indexes = set(parse_int_values(getattr(args, "hier_instance_index", [])))
+
     query = " ".join(split_values(args.query)).lower()
     if query:
-        query_has_vine = re.search(r"\bvines?\b|vine_plant|physical_vine", query) is not None
         numbers = [int(token) for token in re.findall(r"\b\d+\b", query)]
-        if query_has_vine:
-            class_names.append("vine_plant")
-            if physical_vine_map and numbers:
-                physical_vine_ids.extend(numbers)
+        wants_leaf = re.search(r"\bleaves\b|\bleaf\b", query) is not None
+        wants_trunk = re.search(r"\btrunks?\b|\bwoody\b|\bwood\b", query) is not None
+        wants_post = re.search(r"\bposts?\b", query) is not None
+        wants_vine = re.search(r"\bvines?\b|vine_plant|physical_vine", query) is not None
+
+        if wants_leaf:
+            if any(row.get("part_id") == "leaf" for row in instance_map.values()):
+                part_ids.add("leaf")
             else:
-                object_indexes.extend(numbers)
-        else:
+                class_names.append("vine_leaf")
+        if wants_trunk:
+            if any(row.get("part_id") == "trunk" for row in instance_map.values()):
+                part_ids.add("trunk")
+            else:
+                class_names.append("vine_trunk")
+        if wants_post:
+            if any(row.get("object_type") == "post" for row in instance_map.values()):
+                object_types.add("post")
+            else:
+                class_names.append("wooden_post")
+            if numbers:
+                hier_instance_indexes.update(numbers)
+        if wants_vine:
+            if any(row.get("object_type") == "vine" for row in instance_map.values()):
+                object_types.add("vine")
+                if numbers:
+                    hier_instance_indexes.update(numbers)
+            else:
+                class_names.append("vine_plant")
+                if physical_vine_map and numbers:
+                    physical_vine_ids.extend(numbers)
+                else:
+                    object_indexes.extend(numbers)
+        elif numbers and not wants_post:
             instance_ids.update(numbers)
 
     for name in class_names:
@@ -238,6 +285,18 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance, phy
             continue
         if labels and row["label"].lower() not in labels:
             continue
+        if object_types and str(row.get("object_type", "")).lower() not in object_types:
+            continue
+        if hier_instance_ids and str(row.get("hier_instance_id", row.get("instance_id", ""))).lower() not in hier_instance_ids:
+            continue
+        if hier_instance_indexes and int(row.get("instance_index", -1)) not in hier_instance_indexes:
+            continue
+        if part_ids:
+            row_part = str(row.get("part_id", "")).lower()
+            # For vines, "whole" means all parts for that instance; posts keep their explicit whole part.
+            effective_parts = {p for p in part_ids if not (p == "whole" and row.get("object_type") == "vine")}
+            if effective_parts and row_part not in effective_parts:
+                continue
         candidate_instances.append(inst_id)
 
     selected_instances = set(instance_ids)
@@ -249,6 +308,7 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance, phy
         selected_instances.update(physical_vine_map[physical_id]["member_instance_ids"])
         selected_physical_vines.append(physical_vine_map[physical_id])
 
+    metadata_filter_used = bool(object_types or part_ids or hier_instance_ids or hier_instance_indexes)
     if object_indexes:
         if not candidate_instances:
             candidate_instances = sorted(int(v) for v in np.unique(pred_instance))
@@ -256,7 +316,7 @@ def selection_from_args(args, class_name_to_id, instance_map, pred_instance, phy
             if object_index < 1 or object_index > len(candidate_instances):
                 raise ValueError(f"object-index {object_index} is outside 1..{len(candidate_instances)}")
             selected_instances.add(candidate_instances[object_index - 1])
-    elif (class_ids or labels) and not selected_instances:
+    elif (class_ids or labels or metadata_filter_used) and not selected_instances:
         selected_instances.update(candidate_instances)
 
     if not selected_instances:
@@ -280,7 +340,7 @@ def summarize_instances(pred_instance, instance_map):
             vine_index = display_index
         else:
             vine_index = None
-        rows.append({
+        item = {
             "instance_id": inst_id,
             "class_id": row["class_id"],
             "class_name": class_name,
@@ -288,7 +348,11 @@ def summarize_instances(pred_instance, instance_map):
             "class_index": display_index,
             "vine_index": vine_index,
             "points": count_by_id.get(inst_id, 0),
-        })
+        }
+        for key in ["object_type", "hier_instance_id", "instance_index", "part_id"]:
+            if key in row:
+                item[key] = row[key]
+        rows.append(item)
     return rows
 
 
@@ -576,6 +640,10 @@ def build_parser():
     parser.add_argument("--physical-vine-id", nargs="*", default=[], help="Physical vine IDs from vine_tracklet_merge_map.json")
     parser.add_argument("--merge-map", default=None, help="Physical vine merge map. Defaults to model_path/vine_tracklet_merges/iteration_*/vine_tracklet_merge_map.json")
     parser.add_argument("--object-index", nargs="*", default=[], help="1-based index within the selected class, e.g. --class-name vine_plant --object-index 3")
+    parser.add_argument("--object-type", nargs="*", default=[], help="Hierarchical object types, e.g. vine or post")
+    parser.add_argument("--part-id", nargs="*", default=[], help="Hierarchical parts, e.g. leaf, trunk, whole")
+    parser.add_argument("--hier-instance-id", nargs="*", default=[], help="Hierarchical instance IDs, e.g. vine_0003 or post_0002")
+    parser.add_argument("--hier-instance-index", nargs="*", default=[], help="1-based hierarchical instance index within object type")
     parser.add_argument("--query", nargs="*", default=[], help='Simple text query, e.g. "only show vines" or "vine 3"')
     parser.add_argument("--min-opacity", type=float, default=0.0)
     parser.add_argument("--color-by", choices=["instance", "class", "rgb"], default="instance")

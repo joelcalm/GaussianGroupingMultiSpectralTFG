@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 
 
 BAND_CHANNELS = {
+    "rgb": [0, 1, 2],
     "rgbp": [0, 1, 2],
     "RGB": [0, 1, 2],
     "b470": [3],
@@ -81,7 +82,7 @@ def read_registered_images(images_txt: Path) -> list[str]:
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        if len(parts) >= 10:
+        if len(parts) >= 10 and Path(parts[9]).suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
             names.append(parts[9])
     if not names:
         raise RuntimeError(f"No registered images found in {images_txt}")
@@ -394,7 +395,7 @@ def main() -> None:
         src = source_scene / name
         if src.exists():
             link_or_copy(src, output_scene / name, args.link)
-    for name in ["frame_info.json", "band_info.json", "partial_channels_summary.json"]:
+    for name in ["frame_info.json", "band_info.json", "partial_channels_summary.json", "colmap_quality.json", "colmap_rgb_variants_summary.json"]:
         src = source_scene / name
         if src.exists():
             shutil.copy2(src, output_scene / name)
@@ -424,7 +425,7 @@ def main() -> None:
         channels = active_channels_for(stem)
         active_channels[stem] = channels
         summary[band_key(stem)] += 1
-        is_rgb = band_key(stem) == "rgbp"
+        is_rgb = band_key(stem) in {"rgb", "rgbp", "RGB"}
         mask_path = semantic_mask_path(sam3_dir, image_name) if is_rgb else None
         tracked_instance_path = instance_mask_path(sam3_dir, image_name) if is_rgb else None
         row = {

@@ -3,10 +3,12 @@ data/
 data
 output/
 output
+outputs/
 media/
 result/
 tests/
 logs/
+weights/
 
 # Python cache
 __pycache__/

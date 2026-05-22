@@ -49,10 +49,29 @@ def copy_label_metadata(source_path, model_path):
         "mask_alignment_report.json",
         "active_channels.json",
         "registered_images_summary.json",
+        "hierarchical_label_schema.json",
+        "hierarchical_label_report.json",
     ]:
         src = os.path.join(metadata_dir, name)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(model_path, name))
+
+def check_colmap_quality_or_exit(source_path, allow_bad_colmap=False):
+    quality_path = os.path.join(source_path, "colmap_quality.json")
+    if not os.path.exists(quality_path):
+        return
+    with open(quality_path) as f:
+        quality = json.load(f)
+    if quality.get("quality_ok", True) or allow_bad_colmap:
+        return
+    reasons = quality.get("quality_reasons", [])
+    plot = quality.get("trajectory_plot", "")
+    raise RuntimeError(
+        "Refusing to train because COLMAP trajectory quality is marked bad. "
+        f"Reasons: {reasons}. Trajectory plot: {plot}. "
+        "Pass --allow_bad_colmap to override after inspection."
+    )
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_wandb):
     first_iter = 0
@@ -410,6 +429,7 @@ if __name__ == "__main__":
     # Add an argument for the configuration file
     parser.add_argument("--config_file", type=str, default="config.json", help="Path to the configuration file")
     parser.add_argument("--use_wandb", action='store_true', default=False, help="Use wandb to record loss value")
+    parser.add_argument("--allow_bad_colmap", action="store_true", default=False, help="Allow training even if source_path/colmap_quality.json marks the trajectory as bad.")
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -444,6 +464,8 @@ if __name__ == "__main__":
     if "densify_grad_threshold" in config:
         args.densify_grad_threshold = config["densify_grad_threshold"]
     
+    check_colmap_quality_or_exit(os.path.abspath(args.source_path), args.allow_bad_colmap)
+
     print("Optimizing " + args.model_path)
 
     if args.use_wandb:
