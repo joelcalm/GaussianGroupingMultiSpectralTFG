@@ -111,13 +111,18 @@ def read_registered_rgb_images(scene_dir: Path) -> list[str]:
     images_txt = scene_dir / "sparse" / "0" / "images.txt"
     if not images_txt.exists():
         raise FileNotFoundError(images_txt)
+    active_channels = load_json(scene_dir / "metadata" / "active_channels.json", {})
     names = []
     for line in images_txt.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        if len(parts) >= 10 and Path(parts[9]).stem.startswith("rgb"):
-            names.append(parts[9])
+        if len(parts) >= 10:
+            image_name = parts[9]
+            stem = Path(image_name).stem
+            channels = active_channels.get(stem)
+            if channels == [0, 1, 2] or stem.startswith("rgb"):
+                names.append(image_name)
     if not names:
         raise RuntimeError(f"No registered RGB images found in {images_txt}")
     return sorted(set(names), key=lambda name: (frame_number(Path(name)), name))

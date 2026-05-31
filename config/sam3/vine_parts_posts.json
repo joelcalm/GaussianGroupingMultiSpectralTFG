@@ -10,43 +10,95 @@
     "tree": 7,
     "stone_wall": 8,
     "shrub_or_other_vegetation": 9,
-    "building": 10
+    "building": 10,
+    "hedge_or_wall_vegetation": 11
   },
   "class_prompts": {
-    "vine_plant": "entire grapevine plant including trunk branches stems and leaves",
-    "vine_leaf": "green grapevine leaves",
-    "vine_trunk": "grapevine trunk woody stems and branches",
-    "wooden_post": "wooden vineyard post",
+    "vine_plant": "cultivated grapevine plant in a vineyard row, including woody grapevine trunk, cordon, canes, stems, and attached grape leaves; exclude trees, hedges, bushes, wall vegetation, ornamental plants, grass, and wooden posts",
+    "vine_leaf": "lobed green grapevine leaves attached to vineyard-row grapevines; exclude tree leaves, hedge leaves, bushes, grass, wall vegetation, and ornamental plants",
+    "vine_trunk": "woody grapevine trunk, cordon, cane, and brown grapevine branches attached to a grapevine; exclude wooden vineyard posts, stakes, tree trunks, and stone walls",
+    "wooden_post": "vertical wooden vineyard support post or stake, weathered wood, not grapevine trunk",
     "ground": "bare soil ground in a vineyard",
-    "sky": "blue sky",
-    "tree": "tree canopy or tree trunk",
+    "sky": "sky and clouds",
+    "tree": "large tree canopy or tree trunk in the background, not grapevine",
     "stone_wall": "stone wall made of rocks",
-    "shrub_or_other_vegetation": "shrub bush or other vegetation that is not grapevine",
-    "building": "building wall or building facade"
+    "shrub_or_other_vegetation": "shrub, bush, weed, grass, or other vegetation that is not grapevine",
+    "building": "building wall or building facade",
+    "hedge_or_wall_vegetation": "hedge, wall vegetation, ornamental garden plant, or dense background bush that is not a vineyard-row grapevine"
   },
   "class_colors": {
-    "background": [0, 0, 0],
-    "vine_plant": [0, 180, 0],
-    "vine_leaf": [40, 230, 70],
-    "vine_trunk": [145, 86, 38],
-    "wooden_post": [190, 126, 62],
-    "ground": [210, 180, 140],
-    "sky": [135, 206, 235],
-    "tree": [34, 139, 34],
-    "stone_wall": [128, 128, 128],
-    "shrub_or_other_vegetation": [50, 205, 50],
-    "building": [255, 182, 193]
+    "background": [
+      0,
+      0,
+      0
+    ],
+    "vine_plant": [
+      0,
+      180,
+      0
+    ],
+    "vine_leaf": [
+      40,
+      230,
+      70
+    ],
+    "vine_trunk": [
+      145,
+      86,
+      38
+    ],
+    "wooden_post": [
+      190,
+      126,
+      62
+    ],
+    "ground": [
+      210,
+      180,
+      140
+    ],
+    "sky": [
+      135,
+      206,
+      235
+    ],
+    "tree": [
+      34,
+      139,
+      34
+    ],
+    "stone_wall": [
+      128,
+      128,
+      128
+    ],
+    "shrub_or_other_vegetation": [
+      50,
+      205,
+      50
+    ],
+    "building": [
+      255,
+      182,
+      193
+    ],
+    "hedge_or_wall_vegetation": [
+      20,
+      115,
+      55
+    ]
   },
   "merge_order": [
     "sky",
     "ground",
     "building",
     "stone_wall",
+    "vine_plant",
     "tree",
     "shrub_or_other_vegetation",
-    "vine_plant",
-    "wooden_post",
+    "hedge_or_wall_vegetation",
     "vine_leaf",
-    "vine_trunk"
+    "vine_trunk",
+    "wooden_post"
   ]
 }

@@ -64,6 +64,7 @@ class ModelParams(ParamGroup):
         self.color_decoder_num_hidden_layers = 2
         self.single_channel_mode = False
         self.num_channels = 3
+        self.rgb_oversample_factor = 1
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

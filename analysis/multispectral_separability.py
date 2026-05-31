@@ -63,8 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model_path", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--source_path", type=Path, default=DEFAULT_SOURCE_PATH)
+    parser.add_argument("--metadata_path", type=Path, default=None, help="Optional scene or metadata directory used only for class_map/instance_label_map lookup.")
     parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--iteration", type=int, default=-1, help="-1 uses the largest saved iteration.")
+    parser.add_argument("--gaussian_ply_path", type=Path, default=None, help="Optional Gaussian PLY to load instead of model_path/point_cloud/iteration_*/point_cloud.ply.")
     parser.add_argument("--resolution", type=int, default=None, help="Override cfg_args resolution.")
     parser.add_argument("--label_source", choices=["sam", "predicted_pixel", "predicted_gaussian"], default="sam")
     parser.add_argument(
@@ -94,9 +96,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-qda", action="store_true", help="Run a QDA auxiliary classifier and save extra classifier metrics.")
     parser.add_argument("--run-tsne", action="store_true", help="Generate t-SNE plots and projected-space clustering metrics.")
     parser.add_argument("--run-umap", action="store_true", help="Generate UMAP plots and projected-space clustering metrics. Skips cleanly if umap-learn is unavailable.")
+    parser.add_argument("--run-hdbscan", action="store_true", help="Run scikit-learn HDBSCAN on RGB, MS, and RGB+MS feature sets.")
+    parser.add_argument("--hdbscan-max-samples", type=int, default=None, help="Stratified sample cap for HDBSCAN. Defaults to --max-samples.")
+    parser.add_argument("--hdbscan-min-cluster-size", type=int, default=30)
+    parser.add_argument("--hdbscan-min-samples", type=int, default=None)
+    parser.add_argument("--hdbscan-cluster-selection-epsilon", type=float, default=0.0)
     parser.add_argument("--level", choices=["gaussian", "pixel", "all"], default="all", help="Level label used for extra output names. Current --label_source determines the collected samples.")
     parser.add_argument("--feature-set", choices=["rgb", "ms", "rgbms", "all"], default="all", help="Feature set filter for analysis outputs.")
+    parser.add_argument("--include_color_embedding_feature", action="store_true", help="Also evaluate the learned color embedding for predicted_gaussian runs when --feature-set=all.")
     parser.add_argument("--ignore_labels", type=int, nargs="*", default=[0])
+    parser.add_argument(
+        "--target_classes",
+        choices=["none", "vine_ground_post", "vine_ground_post_other"],
+        default="none",
+        help="Filter/remap labels after collection. vine_ground_post keeps vine, ground/floor, and wooden_post/post labels; vine_ground_post_other maps all remaining non-ignored labels to other.",
+    )
     knn_group = parser.add_mutually_exclusive_group()
     knn_group.add_argument("--include_knn", dest="include_knn", action="store_true")
     knn_group.add_argument("--no_include_knn", dest="include_knn", action="store_false")
@@ -107,6 +121,8 @@ def parse_args() -> argparse.Namespace:
         args.seed = int(args.random_state)
     if args.max_samples is None:
         args.max_samples = args.plot_max_samples
+    if args.hdbscan_max_samples is None:
+        args.hdbscan_max_samples = args.max_samples
     return args
 
 
@@ -139,8 +155,12 @@ def load_json(path: Path, default):
     return json.loads(path.read_text())
 
 
+def metadata_dir(metadata_path: Path) -> Path:
+    return metadata_path if metadata_path.name == "metadata" else metadata_path / "metadata"
+
+
 def label_names(source_path: Path, label_mode: str, num_classes: int, label_source: str) -> dict[int, str]:
-    metadata = source_path / "metadata"
+    metadata = metadata_dir(source_path)
     class_map = load_json(metadata / "class_map.json", {})
     class_names = {int(v): str(k) for k, v in class_map.items()}
     instance_map = load_json(metadata / "instance_label_map.json", {})
@@ -162,7 +182,7 @@ def label_names(source_path: Path, label_mode: str, num_classes: int, label_sour
 def semantic_label_remap(source_path: Path, label_mode: str) -> dict[int, int] | None:
     if label_mode != "semantic":
         return None
-    metadata = source_path / "metadata"
+    metadata = metadata_dir(source_path)
     instance_map = load_json(metadata / "instance_label_map.json", {})
     remap = {}
     for key, row in instance_map.items():
@@ -262,7 +282,7 @@ def build_cameras(cam_infos, load_args: argparse.Namespace):
     )
 
 
-def load_model(model_path: Path, cfg: argparse.Namespace, iteration: int):
+def load_model(model_path: Path, cfg: argparse.Namespace, iteration: int, gaussian_ply_path: Path | None = None):
     from gaussian_renderer import GaussianModel
     from utils.color_decoder import ColorDecoder
 
@@ -275,7 +295,7 @@ def load_model(model_path: Path, cfg: argparse.Namespace, iteration: int):
     sh_degree = int(getattr(cfg, "sh_degree", 0))
 
     iter_dir = model_path / "point_cloud" / f"iteration_{iteration}"
-    ply_path = iter_dir / "point_cloud.ply"
+    ply_path = gaussian_ply_path.resolve() if gaussian_ply_path is not None else iter_dir / "point_cloud.ply"
     decoder_path = iter_dir / "color_decoder.pth"
     classifier_path = iter_dir / "classifier.pth"
     if not ply_path.exists():
@@ -306,6 +326,68 @@ def load_model(model_path: Path, cfg: argparse.Namespace, iteration: int):
     classifier.load_state_dict(torch.load(classifier_path, map_location="cuda"))
     classifier.eval()
     return gaussians, color_decoder, classifier
+
+
+def target_class_for_label(label: int, names: dict[int, str]) -> tuple[int, str] | None:
+    name = names.get(int(label), str(label)).lower().replace("-", "_").replace(" ", "_")
+    if name == "vine" or name.startswith("vine_") or "vine" in name:
+        return 1, "vine"
+    if name in {"ground", "floor"} or "ground" in name or "floor" in name:
+        return 2, "ground"
+    if name in {"wooden_post", "post"} or "wooden_post" in name or name.endswith("_post") or "post" in name:
+        return 3, "wooden_post"
+    return None
+
+
+def filter_target_classes(
+    samples: dict[str, np.ndarray],
+    y: np.ndarray,
+    groups: np.ndarray | None,
+    names: dict[int, str],
+    target_classes: str,
+) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray | None, dict[int, str], dict]:
+    if target_classes == "none":
+        return samples, y, groups, names, {}
+
+    if target_classes not in {"vine_ground_post", "vine_ground_post_other"}:
+        raise ValueError(f"Unsupported target class filter: {target_classes}")
+
+    include_other = target_classes == "vine_ground_post_other"
+    remapped = np.full(y.shape, -1, dtype=np.int64)
+    source_to_target = {}
+    for label in np.unique(y):
+        target = target_class_for_label(int(label), names)
+        if target is None:
+            if not include_other:
+                continue
+            target_id, target_name = 4, "other"
+        else:
+            target_id, target_name = target
+        remapped[y == label] = target_id
+        source_to_target[int(label)] = target_name
+
+    keep = remapped >= 0
+    if not np.any(keep):
+        available = {int(label): names.get(int(label), str(label)) for label in np.unique(y)}
+        raise RuntimeError(
+            f"No samples matched --target_classes={target_classes}. "
+            f"Available labels after prediction/remap were: {available}"
+        )
+
+    filtered_samples = {key: value[keep] for key, value in samples.items()}
+    filtered_groups = groups[keep] if groups is not None else None
+    filtered_y = remapped[keep]
+    target_names = {1: "vine", 2: "ground", 3: "wooden_post"}
+    if include_other:
+        target_names[4] = "other"
+    notes = {
+        "target_classes": target_classes,
+        "target_class_names": target_names,
+        "n_samples_before_target_filter": int(y.shape[0]),
+        "n_samples_after_target_filter": int(filtered_y.shape[0]),
+        "source_label_to_target_class": source_to_target,
+    }
+    return filtered_samples, filtered_y, filtered_groups, target_names, notes
 
 
 def decoder_view_dependence_report(color_decoder, gaussians) -> dict:
@@ -822,6 +904,221 @@ def projected_space_metrics(coords: np.ndarray, y: np.ndarray) -> dict[str, floa
         return {"silhouette": math.nan, "davies_bouldin": math.nan, "calinski_harabasz": math.nan}
 
 
+
+
+def hdbscan_cluster_analysis(
+    x: np.ndarray,
+    y: np.ndarray,
+    max_samples: int,
+    seed: int,
+    min_cluster_size: int,
+    min_samples: int | None,
+    cluster_selection_epsilon: float,
+) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
+    from sklearn.cluster import HDBSCAN
+    from sklearn.metrics import (
+        adjusted_rand_score,
+        calinski_harabasz_score,
+        completeness_score,
+        davies_bouldin_score,
+        homogeneity_score,
+        normalized_mutual_info_score,
+        silhouette_score,
+        v_measure_score,
+    )
+    from sklearn.preprocessing import StandardScaler
+
+    idx = stratified_sample_indices(y, max_samples, seed)
+    xs = StandardScaler().fit_transform(x[idx])
+    ys = y[idx]
+    if xs.shape[0] < 2:
+        row = {
+            "n_samples": int(xs.shape[0]),
+            "n_classes": int(np.unique(ys).size),
+            "n_clusters": 0,
+            "n_noise": 0,
+            "noise_fraction": math.nan,
+            "adjusted_rand": math.nan,
+            "normalized_mutual_info": math.nan,
+            "homogeneity": math.nan,
+            "completeness": math.nan,
+            "v_measure": math.nan,
+            "cluster_silhouette": math.nan,
+            "cluster_davies_bouldin": math.nan,
+            "cluster_calinski_harabasz": math.nan,
+            "note": "HDBSCAN requires at least two samples.",
+        }
+        return row, idx, ys, np.full(xs.shape[0], -1, dtype=np.int64)
+
+    clusterer = HDBSCAN(
+        min_cluster_size=max(2, int(min_cluster_size)),
+        min_samples=None if min_samples is None else max(1, int(min_samples)),
+        cluster_selection_epsilon=float(cluster_selection_epsilon),
+    )
+    cluster_labels = clusterer.fit_predict(xs)
+    clustered = cluster_labels >= 0
+    cluster_ids = np.unique(cluster_labels[clustered])
+    n_clusters = int(cluster_ids.size)
+    n_noise = int(np.count_nonzero(~clustered))
+    row = {
+        "n_samples": int(xs.shape[0]),
+        "n_classes": int(np.unique(ys).size),
+        "n_clusters": n_clusters,
+        "n_noise": n_noise,
+        "noise_fraction": float(n_noise / max(1, xs.shape[0])),
+        "adjusted_rand": float(adjusted_rand_score(ys, cluster_labels)),
+        "normalized_mutual_info": float(normalized_mutual_info_score(ys, cluster_labels)),
+        "homogeneity": float(homogeneity_score(ys, cluster_labels)),
+        "completeness": float(completeness_score(ys, cluster_labels)),
+        "v_measure": float(v_measure_score(ys, cluster_labels)),
+        "cluster_silhouette": math.nan,
+        "cluster_davies_bouldin": math.nan,
+        "cluster_calinski_harabasz": math.nan,
+        "note": "",
+    }
+    if n_clusters >= 2 and np.count_nonzero(clustered) > n_clusters:
+        try:
+            row.update({
+                "cluster_silhouette": float(silhouette_score(xs[clustered], cluster_labels[clustered])),
+                "cluster_davies_bouldin": float(davies_bouldin_score(xs[clustered], cluster_labels[clustered])),
+                "cluster_calinski_harabasz": float(calinski_harabasz_score(xs[clustered], cluster_labels[clustered])),
+            })
+        except ValueError as exc:
+            row["note"] = f"Cluster-internal metrics skipped: {exc}"
+    elif n_clusters == 0:
+        row["note"] = "All sampled points were labelled as HDBSCAN noise."
+    elif n_clusters == 1:
+        row["note"] = "Only one non-noise HDBSCAN cluster was found."
+    return row, idx, ys, cluster_labels.astype(np.int64)
+
+
+def write_hdbscan_metrics(out_dir: Path, level_prefix: str, rows: list[dict]) -> None:
+    if not rows:
+        return
+    fieldnames = [
+        "level",
+        "feature_set",
+        "n_samples",
+        "n_classes",
+        "n_clusters",
+        "n_noise",
+        "noise_fraction",
+        "adjusted_rand",
+        "normalized_mutual_info",
+        "homogeneity",
+        "completeness",
+        "v_measure",
+        "cluster_silhouette",
+        "cluster_davies_bouldin",
+        "cluster_calinski_harabasz",
+        "min_cluster_size",
+        "min_samples",
+        "cluster_selection_epsilon",
+        "note",
+    ]
+    with (out_dir / f"hdbscan_metrics_{level_prefix}.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+
+def save_hdbscan_assignments(
+    out_dir: Path,
+    filename: str,
+    sample_idx: np.ndarray,
+    y: np.ndarray,
+    cluster_labels: np.ndarray,
+    names: dict[int, str],
+) -> None:
+    with (out_dir / filename).open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["sample_index", "label_id", "label_name", "hdbscan_cluster"])
+        for idx, label, cluster in zip(sample_idx, y, cluster_labels):
+            writer.writerow([int(idx), int(label), names.get(int(label), str(label)), int(cluster)])
+
+
+def save_hdbscan_pca_plot(
+    out_dir: Path,
+    filename: str,
+    title: str,
+    x: np.ndarray,
+    sample_idx: np.ndarray,
+    cluster_labels: np.ndarray,
+    seed: int,
+) -> None:
+    import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    xs = StandardScaler().fit_transform(x[sample_idx])
+    coords = PCA(n_components=2, random_state=seed).fit_transform(xs)
+    labels = np.array(sorted(np.unique(cluster_labels)))
+    non_noise = labels[labels >= 0]
+    cmap = plt.get_cmap("tab20", max(len(non_noise), 1))
+    fig, ax = plt.subplots(figsize=(8, 6))
+    noise_mask = cluster_labels < 0
+    if np.any(noise_mask):
+        ax.scatter(coords[noise_mask, 0], coords[noise_mask, 1], s=5, alpha=0.18, color="0.55", label="noise")
+    for pos, label in enumerate(non_noise):
+        mask = cluster_labels == label
+        ax.scatter(coords[mask, 0], coords[mask, 1], s=5, alpha=0.45, color=cmap(pos), label=f"cluster {int(label)}")
+    ax.set_title(title)
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    if len(labels) <= 16:
+        ax.legend(markerscale=3, fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(out_dir / filename, dpi=180)
+    plt.close(fig)
+
+
+def run_hdbscan_analyses(
+    out_dir: Path,
+    feature_sets: dict[str, np.ndarray],
+    y: np.ndarray,
+    names: dict[int, str],
+    args: argparse.Namespace,
+    level_prefix: str,
+) -> list[dict]:
+    spectral_sets = selected_feature_sets(feature_sets, args.feature_set, include_non_spectral=False)
+    rows = []
+    for set_name, x in spectral_sets.items():
+        slug = feature_slug(set_name)
+        print(
+            f"[hdbscan] {level_prefix}_{slug}: max_samples={args.hdbscan_max_samples}, "
+            f"min_cluster_size={args.hdbscan_min_cluster_size}, min_samples={args.hdbscan_min_samples}"
+        )
+        row, idx, ys, cluster_labels = hdbscan_cluster_analysis(
+            x,
+            y,
+            args.hdbscan_max_samples,
+            args.seed,
+            args.hdbscan_min_cluster_size,
+            args.hdbscan_min_samples,
+            args.hdbscan_cluster_selection_epsilon,
+        )
+        row.update({
+            "level": level_prefix,
+            "feature_set": set_name,
+            "min_cluster_size": int(args.hdbscan_min_cluster_size),
+            "min_samples": "" if args.hdbscan_min_samples is None else int(args.hdbscan_min_samples),
+            "cluster_selection_epsilon": float(args.hdbscan_cluster_selection_epsilon),
+        })
+        save_hdbscan_assignments(out_dir, f"{level_prefix}_{slug}_hdbscan_assignments.csv", idx, ys, cluster_labels, names)
+        save_hdbscan_pca_plot(
+            out_dir,
+            f"{level_prefix}_{slug}_hdbscan_pca.png",
+            f"{level_prefix} {set_name} HDBSCAN clusters",
+            x,
+            idx,
+            cluster_labels,
+            args.seed,
+        )
+        rows.append(row)
+    write_hdbscan_metrics(out_dir, level_prefix, rows)
+    return rows
+
 def lda_projection(x: np.ndarray, y: np.ndarray, max_samples: int, seed: int):
     from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
     from sklearn.preprocessing import StandardScaler
@@ -1287,6 +1584,7 @@ def main() -> None:
 
     model_path = args.model_path.resolve()
     source_path = args.source_path.resolve()
+    metadata_path = (args.metadata_path or args.source_path).resolve()
     out_dir = mode_output_dir(args.output_dir, args.label_source)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1296,16 +1594,22 @@ def main() -> None:
     num_classes = int(getattr(cfg, "num_classes", 200))
     effective_label_mode = args.label_mode
     load_args = make_load_args(args, cfg, effective_label_mode)
-    names = label_names(source_path, effective_label_mode, num_classes, args.label_source)
-    label_remap = semantic_label_remap(source_path, effective_label_mode)
+    names = label_names(metadata_path, effective_label_mode, num_classes, args.label_source)
+    label_remap = semantic_label_remap(metadata_path, effective_label_mode)
 
     print(f"[setup] model_path={model_path}")
     print(f"[setup] source_path={source_path}")
+    if metadata_path != source_path:
+        print(f"[setup] metadata_path={metadata_path}")
     print(f"[setup] iteration={iteration}")
     print(f"[setup] label_source={args.label_source}, label_mode={effective_label_mode}, object_path={load_args.object_path}")
+    if args.gaussian_ply_path is not None:
+        print(f"[setup] gaussian_ply_path={args.gaussian_ply_path.resolve()}")
+    if args.target_classes != "none":
+        print(f"[setup] target_classes={args.target_classes}")
 
-    scene_info = read_scene_infos(source_path, load_args)
-    gaussians, color_decoder, classifier = load_model(model_path, cfg, iteration)
+    scene_info = None if args.label_source == "predicted_gaussian" else read_scene_infos(source_path, load_args)
+    gaussians, color_decoder, classifier = load_model(model_path, cfg, iteration, args.gaussian_ply_path)
     view_dependence = None
     if args.run_viewdep:
         view_dependence = decoder_view_dependence_report(color_decoder, gaussians)
@@ -1370,30 +1674,43 @@ def main() -> None:
         )
         samples, y, groups, split_notes = filter_split_ready_samples(samples, y, groups, args.test_size)
         notes.update(split_notes)
-        train_idx, test_idx, split_name = random_gaussian_split(y, args.test_size, args.seed)
         cam_infos = []
+
+    samples, y, groups, names, target_notes = filter_target_classes(samples, y, groups, names, args.target_classes)
+    notes.update(target_notes)
+    samples, y, groups, split_notes = filter_split_ready_samples(samples, y, groups, args.test_size)
+    notes.update(split_notes)
+    if args.label_source == "predicted_gaussian":
+        train_idx, test_idx, split_name = random_gaussian_split(y, args.test_size, args.seed)
+    else:
+        train_idx, test_idx, split_name = grouped_split(y, groups, args.test_size, args.seed)
 
     print(f"[samples] collected {y.shape[0]} samples across {np.unique(y).size} labels")
     print(f"[split] {split_name}: train={train_idx.size}, test={test_idx.size}")
 
     save_spectral_signatures(out_dir, samples["SPECTRAL10"], y, names, args.signature_max_classes)
     all_features = build_feature_sets(samples, args.label_source)
-    features = selected_feature_sets(all_features, args.feature_set, include_non_spectral=True)
+    features = selected_feature_sets(all_features, args.feature_set, include_non_spectral=args.include_color_embedding_feature)
     if not features:
         raise RuntimeError(f"No feature sets selected by --feature-set={args.feature_set}")
     evaluate_feature_sets(out_dir, features, y, train_idx, test_idx, split_name, names, args)
 
     level_prefix = level_prefix_for_run(args.label_source, args.level)
-    extra_results = {"projection_rows": [], "classifier_rows": []}
+    extra_results = {"projection_rows": [], "classifier_rows": [], "hdbscan_rows": []}
     if args.run_lda or args.run_tsne or args.run_umap or args.run_qda:
-        extra_results = run_extra_analyses(out_dir, features, y, train_idx, test_idx, names, args, level_prefix)
+        extra_results.update(run_extra_analyses(out_dir, features, y, train_idx, test_idx, names, args, level_prefix))
+    if args.run_hdbscan:
+        extra_results["hdbscan_rows"] = run_hdbscan_analyses(out_dir, features, y, names, args, level_prefix)
 
     summary = {
         "model_path": str(model_path),
         "source_path": str(source_path),
+        "metadata_path": str(metadata_path),
         "iteration": iteration,
         "label_source": args.label_source,
         "label_mode": effective_label_mode,
+        "gaussian_ply_path": str(args.gaussian_ply_path.resolve()) if args.gaussian_ply_path is not None else None,
+        "target_classes": args.target_classes,
         "view_split": args.view_split,
         "num_views": len(cam_infos),
         "num_samples": int(y.shape[0]),
@@ -1402,17 +1719,24 @@ def main() -> None:
         "channel_names": CHANNEL_NAMES,
         "feature_sets": list(features.keys()),
         "feature_set_filter": args.feature_set,
+        "include_color_embedding_feature": bool(args.include_color_embedding_feature),
         "extra_level_prefix": level_prefix,
         "extra_methods": {
             "lda": bool(args.run_lda),
             "qda": bool(args.run_qda),
             "tsne": bool(args.run_tsne),
             "umap": bool(args.run_umap),
+            "hdbscan": bool(args.run_hdbscan),
             "max_samples": int(args.max_samples),
+            "hdbscan_max_samples": int(args.hdbscan_max_samples),
+            "hdbscan_min_cluster_size": int(args.hdbscan_min_cluster_size),
+            "hdbscan_min_samples": args.hdbscan_min_samples,
+            "hdbscan_cluster_selection_epsilon": float(args.hdbscan_cluster_selection_epsilon),
             "random_state": int(args.seed),
         },
         "extra_projection_rows": extra_results["projection_rows"],
         "extra_classifier_rows": extra_results["classifier_rows"],
+        "hdbscan_rows": extra_results["hdbscan_rows"],
         "interpretation_note": "Predicted label modes are representation/class-coherence analyses using the model's own labels, not ground-truth segmentation accuracy.",
         "decoder_view_dependence": view_dependence,
         "notes": notes,

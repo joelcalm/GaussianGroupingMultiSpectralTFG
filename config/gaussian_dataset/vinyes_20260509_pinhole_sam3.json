@@ -1,8 +1,8 @@
 {
-    "densify_until_iter": 6000,
+    "densify_until_iter": 10000,
     "densify_grad_threshold": 5e-05,
     "num_objects": 16,
-    "max_num_points": 1000000,
+    "max_num_points": 1500000,
     "reg3d_interval": 5,
     "reg3d_k": 5,
     "reg3d_lambda_val": 2,

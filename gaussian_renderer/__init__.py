@@ -86,6 +86,13 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+            if colors_precomp.shape[1] < bg_color.shape[0]:
+                pad = torch.zeros(
+                    (colors_precomp.shape[0], bg_color.shape[0] - colors_precomp.shape[1]),
+                    dtype=colors_precomp.dtype,
+                    device=colors_precomp.device,
+                )
+                colors_precomp = torch.cat([colors_precomp, pad], dim=1)
         else:
             shs = pc.get_features
 

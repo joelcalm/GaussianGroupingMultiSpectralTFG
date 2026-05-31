@@ -36,6 +36,21 @@ def active_channel_loss_tensors(rendered, target, viewpoint_cam):
     return rendered.index_select(0, active_channels), target.index_select(0, active_channels)
 
 
+def build_viewpoint_stack(cameras, rgb_oversample_factor=1):
+    stack = list(cameras)
+    rgb_oversample_factor = max(1, int(rgb_oversample_factor or 1))
+    if rgb_oversample_factor <= 1:
+        return stack
+
+    rgb_cameras = [
+        cam for cam in cameras
+        if cam.image_name.startswith("frame_") or cam.image_name.startswith("rgb_")
+    ]
+    if rgb_cameras:
+        stack.extend(rgb_cameras * (rgb_oversample_factor - 1))
+    return stack
+
+
 def copy_label_metadata(source_path, model_path):
     metadata_dir = os.path.join(source_path, "metadata")
     if not os.path.isdir(metadata_dir):
@@ -102,6 +117,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Densify from iter: ", opt.densify_from_iter)
     print("Densify until iter: ", opt.densify_until_iter)
     print("Single channel mode: ", single_channel_mode)
+    print("RGB oversample factor: ", getattr(dataset, "rgb_oversample_factor", 1))
     if single_channel_mode:
         print(f"  Training with random per-iteration channel selection over {num_channels} channels")
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
@@ -167,7 +183,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
+            viewpoint_stack = build_viewpoint_stack(
+                scene.getTrainCameras(),
+                getattr(dataset, "rgb_oversample_factor", 1),
+            )
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
         # Render
@@ -461,6 +480,7 @@ if __name__ == "__main__":
     args.color_decoder_lr = config.get("color_decoder_lr", 0.001)
     args.single_channel_mode = config.get("single_channel_mode", False)
     args.num_channels = config.get("num_channels", 3)
+    args.rgb_oversample_factor = config.get("rgb_oversample_factor", 1)
     if "densify_grad_threshold" in config:
         args.densify_grad_threshold = config["densify_grad_threshold"]
     
