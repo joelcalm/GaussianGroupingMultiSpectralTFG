@@ -76,6 +76,11 @@ MERGE_ORDER = [
     "vine_plant",
 ]
 
+HELPER_CLASSES: set[str] = set()
+TRACK_CLASSES: set[str] | None = None
+CLASS_POSTPROCESS: dict[str, dict[str, Any]] = {}
+VINE_BINARY_CLASSES: list[str] = ["vine_plant"]
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 CONF_THRESHOLD = 0.25
@@ -162,6 +167,7 @@ def parse_args() -> argparse.Namespace:
 def load_class_config(path: Path) -> None:
     """Load a scene-specific class/prompt config into the module globals."""
     global CLASS_MAP, CLASS_PROMPTS, CLASS_COLORS, MERGE_ORDER
+    global HELPER_CLASSES, TRACK_CLASSES, CLASS_POSTPROCESS, VINE_BINARY_CLASSES
 
     with path.open(encoding="utf-8") as f:
         data = json.load(f)
@@ -189,10 +195,40 @@ def load_class_config(path: Path) -> None:
             raise ValueError(f"Color for {name} must have 3 channels")
         normalized_colors[idx] = tuple(int(v) for v in raw)
 
+    helper_classes = {str(name) for name in data.get("helper_classes", [])}
+    unknown_helpers = sorted(name for name in helper_classes if name not in class_prompts)
+    if unknown_helpers:
+        raise ValueError(f"{path} helper_classes are missing prompts: {unknown_helpers}")
+
+    track_classes_raw = data.get("track_classes")
+    if track_classes_raw is None:
+        track_classes = {str(name) for name in class_map if str(name) != "background"}
+    elif isinstance(track_classes_raw, list):
+        track_classes = {str(name) for name in track_classes_raw}
+    else:
+        raise ValueError(f"{path} field 'track_classes' must be a list when present")
+    unknown_track_classes = sorted(name for name in track_classes if name not in class_prompts)
+    if unknown_track_classes:
+        raise ValueError(f"{path} track_classes are missing prompts: {unknown_track_classes}")
+
+    class_postprocess = data.get("class_postprocess", data.get("postprocess", {}))
+    if not isinstance(class_postprocess, dict):
+        raise ValueError(f"{path} field 'class_postprocess' must be an object when present")
+
+    vine_binary_classes = data.get("vine_binary_classes")
+    if vine_binary_classes is None:
+        vine_binary_classes = ["vine_plant"] if "vine_plant" in class_map else []
+    if not isinstance(vine_binary_classes, list):
+        raise ValueError(f"{path} field 'vine_binary_classes' must be a list when present")
+
     CLASS_MAP = {str(name): int(idx) for name, idx in class_map.items()}
     CLASS_PROMPTS = {str(name): str(prompt) for name, prompt in class_prompts.items()}
     CLASS_COLORS = normalized_colors
     MERGE_ORDER = [str(name) for name in merge_order if str(name) != "background"]
+    HELPER_CLASSES = helper_classes
+    TRACK_CLASSES = track_classes - helper_classes
+    CLASS_POSTPROCESS = {str(name): dict(rule) for name, rule in class_postprocess.items()}
+    VINE_BINARY_CLASSES = [str(name) for name in vine_binary_classes]
 
 
 # ----------------------------
@@ -518,6 +554,66 @@ def maybe_dilate_mask(mask: np.ndarray, kernel_size: int, iterations: int) -> np
     return cv2.dilate(mask, kernel, iterations=iterations)
 
 
+def brown_woody_pixel_mask(image_bgr: np.ndarray) -> np.ndarray:
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    b, g, r = cv2.split(image_bgr.astype(np.int16))
+
+    return (
+        (h >= 4)
+        & (h <= 32)
+        & (s >= 35)
+        & (v >= 25)
+        & (r >= g + 8)
+        & (g >= b - 5)
+    )
+
+
+def load_binary_mask(path: Path) -> np.ndarray | None:
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        return None
+    return mask > 127
+
+
+def apply_class_postprocess(
+    class_name: str,
+    mask: np.ndarray,
+    image_bgr: np.ndarray,
+    stem: str,
+    temp_class_root: Path,
+) -> np.ndarray:
+    rules = CLASS_POSTPROCESS.get(class_name, {})
+    if not rules:
+        return (mask > 0).astype(np.uint8)
+
+    processed = mask > 0
+
+    clip_to_class = rules.get("clip_to_class")
+    if clip_to_class:
+        if isinstance(clip_to_class, str):
+            clip_names = [clip_to_class]
+        else:
+            clip_names = [str(name) for name in clip_to_class]
+
+        clip_mask = np.zeros(processed.shape, dtype=bool)
+        for clip_name in clip_names:
+            ref_mask = load_binary_mask(temp_class_root / clip_name / f"{stem}.png")
+            if ref_mask is None:
+                raise FileNotFoundError(
+                    f"Class '{class_name}' requested clip_to_class='{clip_name}', "
+                    f"but no mask exists for frame {stem}.png. Put helper classes before "
+                    "dependent classes in merge_order."
+                )
+            clip_mask |= ref_mask
+        processed &= clip_mask
+
+    if rules.get("remove_brown_pixels", False):
+        processed &= ~brown_woody_pixel_mask(image_bgr)
+
+    return processed.astype(np.uint8)
+
+
 def save_binary_mask(mask: np.ndarray, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), (mask > 0).astype(np.uint8) * 255)
@@ -587,6 +683,18 @@ def write_metadata(output_dir: Path) -> None:
     with (metadata_dir / "merge_order.json").open("w", encoding="utf-8") as f:
         json.dump(MERGE_ORDER, f, indent=2)
 
+    with (metadata_dir / "helper_classes.json").open("w", encoding="utf-8") as f:
+        json.dump(sorted(HELPER_CLASSES), f, indent=2)
+
+    with (metadata_dir / "track_classes.json").open("w", encoding="utf-8") as f:
+        json.dump(sorted(TRACK_CLASSES or []), f, indent=2)
+
+    with (metadata_dir / "class_postprocess.json").open("w", encoding="utf-8") as f:
+        json.dump(CLASS_POSTPROCESS, f, indent=2)
+
+    with (metadata_dir / "vine_binary_classes.json").open("w", encoding="utf-8") as f:
+        json.dump(VINE_BINARY_CLASSES, f, indent=2)
+
 
 # ----------------------------
 # Main processing
@@ -607,8 +715,6 @@ def run_class_predictions(
       - temporarily save one binary mask per frame in temp_class_root/<class_name>/
       - only save final vine_binary_masks/ and vine_overlays/ permanently
     """
-    vine_mask_dir = args.output_dir / "vine_binary_masks"
-    vine_overlay_dir = args.output_dir / "vine_overlays"
     saved_binary_root = args.output_dir / "class_binary_masks"
     saved_instance_root = args.output_dir / "class_instance_masks"
 
@@ -635,71 +741,72 @@ def run_class_predictions(
 
         desc = f"Class: {class_name}"
 
-        for image_path, result in tqdm(
-            zip(image_paths, results),
-            total=len(image_paths),
-            unit="frame",
-            desc=desc,
-        ):
-            image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-            if image is None:
-                raise ValueError(f"Could not read image: {image_path}")
+        try:
+            for image_path, result in tqdm(
+                zip(image_paths, results),
+                total=len(image_paths),
+                unit="frame",
+                desc=desc,
+            ):
+                image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError(f"Could not read image: {image_path}")
 
-            class_mask = np.zeros(image.shape[:2], dtype=np.uint8)
-            instance_mask = np.zeros(image.shape[:2], dtype=np.uint16)
-            for instance in result_to_instances(result, image.shape[:2], args.mask_threshold):
-                mask = postprocess_mask(
-                    instance["mask"],
-                    image.shape[:2],
-                    min_component_area=args.min_component_area,
-                    morph_kernel_size=args.morph_kernel_size,
-                )
-                mask = maybe_dilate_mask(
-                    mask,
-                    args.dilate_kernel_size,
-                    args.dilate_iterations,
-                )
-                if not mask.any():
-                    continue
+                stem = image_path.stem
+                class_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                instance_mask = np.zeros(image.shape[:2], dtype=np.uint16)
+                for instance in result_to_instances(result, image.shape[:2], args.mask_threshold):
+                    mask = postprocess_mask(
+                        instance["mask"],
+                        image.shape[:2],
+                        min_component_area=args.min_component_area,
+                        morph_kernel_size=args.morph_kernel_size,
+                    )
+                    mask = maybe_dilate_mask(
+                        mask,
+                        args.dilate_kernel_size,
+                        args.dilate_iterations,
+                    )
+                    mask = apply_class_postprocess(class_name, mask, image, stem, temp_class_root)
+                    if not mask.any():
+                        continue
 
-                key = (class_name, int(instance["track_id"]))
-                if key not in track_to_instance_id:
-                    global_instance_id = len(instance_label_map)
-                    track_to_instance_id[key] = global_instance_id
-                    instance_label_map[str(global_instance_id)] = {
-                        "class_id": int(CLASS_MAP[class_name]),
-                        "class_name": class_name,
-                        "label": f"{class_name}_track_{int(instance['track_id']):04d}",
-                        "source": "sam3_video_tracker",
-                        "sam3_track_id": int(instance["track_id"]),
-                    }
-                else:
-                    global_instance_id = track_to_instance_id[key]
+                    mask_bool = mask > 0
+                    class_mask[mask_bool] = 1
 
-                mask_bool = mask > 0
-                class_mask[mask_bool] = 1
-                instance_mask[mask_bool] = global_instance_id
+                    should_track = class_name not in HELPER_CLASSES and (TRACK_CLASSES is None or class_name in TRACK_CLASSES)
+                    if not should_track:
+                        continue
 
-            stem = image_path.stem
+                    key = (class_name, int(instance["track_id"]))
+                    if key not in track_to_instance_id:
+                        global_instance_id = len(instance_label_map)
+                        track_to_instance_id[key] = global_instance_id
+                        instance_label_map[str(global_instance_id)] = {
+                            "class_id": int(CLASS_MAP[class_name]),
+                            "class_name": class_name,
+                            "label": f"{class_name}_track_{int(instance['track_id']):04d}",
+                            "source": "sam3_video_tracker",
+                            "sam3_track_id": int(instance["track_id"]),
+                        }
+                    else:
+                        global_instance_id = track_to_instance_id[key]
 
-            # Temporary class mask, only used to build semantic outputs
-            temp_mask_path = temp_out_dir / f"{stem}.png"
-            save_binary_mask(class_mask, temp_mask_path)
-            save_instance_mask(instance_mask, temp_instance_dir / f"{stem}.png")
+                    instance_mask[mask_bool] = global_instance_id
 
-            if args.save_class_outputs:
-                save_binary_mask(class_mask, saved_binary_root / class_name / f"{stem}.png")
-                save_instance_mask(instance_mask, saved_instance_root / class_name / f"{stem}.png")
+                # Temporary class mask, used to build semantic outputs and dependent postprocess rules.
+                temp_mask_path = temp_out_dir / f"{stem}.png"
+                save_binary_mask(class_mask, temp_mask_path)
+                save_instance_mask(instance_mask, temp_instance_dir / f"{stem}.png")
 
-            # Permanent outputs only for vine
-            if class_name == "vine_plant":
-                save_binary_mask(class_mask, vine_mask_dir / f"{stem}.png")
-                save_overlay(
-                    image,
-                    class_mask,
-                    vine_overlay_dir / f"{stem}.jpg",
-                    alpha=args.overlay_alpha,
-                )
+                if args.save_class_outputs and class_name not in HELPER_CLASSES:
+                    save_binary_mask(class_mask, saved_binary_root / class_name / f"{stem}.png")
+                    if TRACK_CLASSES is None or class_name in TRACK_CLASSES:
+                        save_instance_mask(instance_mask, saved_instance_root / class_name / f"{stem}.png")
+        finally:
+            close = getattr(results, "close", None)
+            if close is not None:
+                close()
 
 def build_semantic_outputs(
     args: argparse.Namespace,
@@ -720,6 +827,8 @@ def build_semantic_outputs(
     semantic_instance_dir = args.output_dir / "semantic_instance_masks"
     semantic_color_dir = args.output_dir / "semantic_color_masks"
     semantic_overlay_dir = args.output_dir / "semantic_overlays"
+    vine_mask_dir = args.output_dir / "vine_binary_masks"
+    vine_overlay_dir = args.output_dir / "vine_overlays"
 
     for image_path in tqdm(image_paths, desc="Assembling semantic masks", unit="frame"):
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
@@ -735,6 +844,9 @@ def build_semantic_outputs(
         # Low priority first, high priority last.
         # Later classes overwrite earlier classes.
         for class_name in MERGE_ORDER:
+            if class_name in HELPER_CLASSES:
+                continue
+
             class_id = CLASS_MAP[class_name]
             class_mask_path = temp_class_root / class_name / f"{stem}.png"
 
@@ -766,6 +878,21 @@ def build_semantic_outputs(
             semantic_overlay_dir / f"{stem}.jpg",
             alpha=args.overlay_alpha,
         )
+
+        vine_class_ids = [
+            CLASS_MAP[name]
+            for name in VINE_BINARY_CLASSES
+            if name in CLASS_MAP and name not in HELPER_CLASSES
+        ]
+        if vine_class_ids:
+            vine_mask = np.isin(semantic_mask, vine_class_ids).astype(np.uint8)
+            save_binary_mask(vine_mask, vine_mask_dir / f"{stem}.png")
+            save_overlay(
+                image,
+                vine_mask,
+                vine_overlay_dir / f"{stem}.jpg",
+                alpha=args.overlay_alpha,
+            )
 
 def main() -> None:
     args = parse_args()

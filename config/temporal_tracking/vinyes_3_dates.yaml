@@ -1,0 +1,28 @@
+reference_scene: vinyes_20260418
+
+scenes:
+  vinyes_20260321:
+    source_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260321
+    colmap_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260321/sparse/0
+    selected_frame: rgbp_00063.png
+    mask_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260321/object_mask
+    model_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260321
+    gaussian_ply_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260321/selections/point_cloud_3_rows.ply
+
+  vinyes_20260418:
+    source_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260418_rgb_colmap_shared
+    colmap_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260418_rgb_colmap_shared/sparse/0
+    selected_frame: frame_00073.jpg
+    mask_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260418_rgb_colmap_shared/object_mask
+    model_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260418
+    gaussian_ply_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260418/selections/point_cloud_3_rows.ply
+
+  vinyes_20260509:
+    source_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260509_pinhole
+    colmap_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260509_pinhole/sparse/0
+    selected_frame: rgb_00025.png
+    mask_path: /home/msiau/data/tmp/jcalm/data/vinyes_20260509_pinhole/object_mask
+    model_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260509
+    gaussian_ply_path: /home/msiau/data/tmp/jcalm/output/vinyes_20260509/selections/point_cloud_3_rows.ply
+
+output_dir: /home/msiau/data/tmp/jcalm/outputs/temporal_vine_tracking

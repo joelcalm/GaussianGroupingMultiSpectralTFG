@@ -1,0 +1,53 @@
+{
+  "class_map": {
+    "background": 0,
+    "vine_leaf": 1,
+    "vine_trunk": 2,
+    "whole_vine_reference": 250
+  },
+  "class_prompts": {
+    "whole_vine_reference": "whole grapevine plant including trunk branches and leaves",
+    "vine_leaf": "grapevine leaves",
+    "vine_trunk": "dark woody grapevine trunk"
+  },
+  "class_colors": {
+    "background": [
+      0,
+      0,
+      0
+    ],
+    "vine_leaf": [
+      40,
+      230,
+      70
+    ],
+    "vine_trunk": [
+      145,
+      86,
+      38
+    ],
+    "whole_vine_reference": [
+      0,
+      180,
+      255
+    ]
+  },
+  "merge_order": [
+    "whole_vine_reference",
+    "vine_leaf",
+    "vine_trunk"
+  ],
+  "helper_classes": [
+    "whole_vine_reference"
+  ],
+  "vine_binary_classes": [
+    "vine_leaf",
+    "vine_trunk"
+  ],
+  "class_postprocess": {
+    "vine_leaf": {
+      "clip_to_class": "whole_vine_reference",
+      "remove_brown_pixels": true
+    }
+  }
+}
