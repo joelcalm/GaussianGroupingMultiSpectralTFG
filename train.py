@@ -25,6 +25,56 @@ import json
 import shutil
 
 
+
+
+
+def color_override_tensor(gaussians, num_channels, disable_color):
+    if not disable_color:
+        return None
+    return torch.zeros(
+        (gaussians.get_xyz.shape[0], int(num_channels)),
+        dtype=gaussians.get_xyz.dtype,
+        device=gaussians.get_xyz.device,
+    )
+
+def normalize_photometric_channels(channels, num_channels):
+    if channels is None:
+        return None
+    if isinstance(channels, str):
+        text = channels.strip()
+        if text == "" or text.lower() in {"all", "none"}:
+            return None if text.lower() != "none" else []
+        channels = [part.strip() for part in text.replace(",", " ").split() if part.strip()]
+    out = []
+    for ch in channels:
+        try:
+            idx = int(ch)
+        except Exception:
+            continue
+        if 0 <= idx < int(num_channels):
+            out.append(idx)
+    return sorted(set(out))
+
+
+def photometric_loss_tensors(rendered, target, viewpoint_cam, photometric_channels):
+    active_channels = getattr(viewpoint_cam, "active_channels", None)
+    if active_channels is not None and len(active_channels) > 0:
+        channels = active_channels.to(rendered.device).long()
+        channels = channels[(channels >= 0) & (channels < rendered.shape[0])]
+    else:
+        channels = torch.arange(rendered.shape[0], device=rendered.device, dtype=torch.long)
+
+    if photometric_channels is not None:
+        allowed = torch.tensor(photometric_channels, device=rendered.device, dtype=torch.long)
+        if allowed.numel() == 0:
+            return None, None, []
+        keep = torch.isin(channels, allowed)
+        channels = channels[keep]
+
+    if channels.numel() == 0:
+        return None, None, []
+    return rendered.index_select(0, channels), target.index_select(0, channels), channels.tolist()
+
 def active_channel_loss_tensors(rendered, target, viewpoint_cam):
     active_channels = getattr(viewpoint_cam, "active_channels", None)
     if active_channels is None or len(active_channels) == 0:
@@ -98,6 +148,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     color_decoder_num_hidden_layers = dataset.color_decoder_num_hidden_layers if hasattr(dataset, 'color_decoder_num_hidden_layers') else 2
     single_channel_mode = getattr(dataset, 'single_channel_mode', False)
     num_channels = getattr(dataset, 'num_channels', 3)
+    photometric_channels = normalize_photometric_channels(getattr(dataset, 'photometric_channels', None), num_channels)
+    photometric_loss_weight = float(getattr(opt, 'photometric_loss_weight', 1.0))
+    disable_color = bool(getattr(dataset, 'disable_color', False))
     gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -118,6 +171,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Densify until iter: ", opt.densify_until_iter)
     print("Single channel mode: ", single_channel_mode)
     print("RGB oversample factor: ", getattr(dataset, "rgb_oversample_factor", 1))
+    print("Photometric channels: ", "all active" if photometric_channels is None else photometric_channels)
+    print("Photometric loss weight: ", photometric_loss_weight)
+    print("Disable color render: ", disable_color)
     if single_channel_mode:
         print(f"  Training with random per-iteration channel selection over {num_channels} channels")
     classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
@@ -161,7 +217,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 net_image_bytes = None
                 custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer, color_decoder=color_decoder)["render"]
+                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer, override_color=color_override_tensor(gaussians, num_channels, disable_color), color_decoder=color_decoder)["render"]
                     if net_image.shape[0] > 3:
                         vis_ch = [0, 3, 6] if net_image.shape[0] >= 7 else list(range(3))
                         net_image = net_image[vis_ch]
@@ -192,7 +248,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, color_decoder=color_decoder)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, override_color=color_override_tensor(gaussians, num_channels, disable_color), color_decoder=color_decoder)
         image, viewspace_point_tensor, visibility_filter, radii, objects = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"], render_pkg["render_object"]
 
         # Object/semantic loss is applied only to views that actually have labels.
@@ -204,24 +260,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             loss_obj = image.sum() * 0.0
 
-        # Loss
+        # Photometric loss. Configured channels are intersected with the active
+        # channels for the current view, so RGB masks can supervise CE while
+        # MS-only runs ignore RGB image reconstruction and vice versa.
         gt_image = viewpoint_cam.original_image.cuda()
-        image_loss, gt_loss = active_channel_loss_tensors(image, gt_image, viewpoint_cam)
+        image_loss, gt_loss, selected_photo_channels = photometric_loss_tensors(
+            image, gt_image, viewpoint_cam, photometric_channels
+        )
 
-        if single_channel_mode:
-            active_channels = getattr(viewpoint_cam, "active_channels", None)
-            if active_channels is not None and len(active_channels) > 0:
-                active_list = active_channels.tolist()
-                ch = active_list[randint(0, len(active_list) - 1)]
-            else:
-                ch = randint(0, num_channels - 1)
+        if image_loss is None or photometric_loss_weight == 0.0:
+            Ll1 = image.sum() * 0.0
+            ssim_val = image.sum() * 0.0 + 1.0
+            loss_photo = image.sum() * 0.0
+        elif single_channel_mode:
+            ch_idx = randint(0, len(selected_photo_channels) - 1)
+            ch = selected_photo_channels[ch_idx]
             image_ch = image[ch:ch+1]
             gt_ch = gt_image[ch:ch+1]
             Ll1 = l1_loss(image_ch, gt_ch)
             ssim_val = ssim(image_ch, gt_ch)
+            loss_photo = photometric_loss_weight * ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val))
         else:
             Ll1 = l1_loss(image_loss, gt_loss)
             ssim_val = ssim(image_loss, gt_loss)
+            loss_photo = photometric_loss_weight * ((1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val))
 
         loss_obj_3d = None
         if iteration % opt.reg3d_interval == 0:
@@ -234,9 +296,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             logits3d = classifier(objects3d)
             prob_obj3d = torch.softmax(logits3d,dim=0).squeeze().permute(1,0)
             loss_obj_3d = loss_cls_3d(xyz3d, prob_obj3d, opt.reg3d_k, opt.reg3d_lambda_val, xyz3d.shape[0], opt.reg3d_sample_size)
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val) + loss_obj + loss_obj_3d
+            loss = loss_photo + loss_obj + loss_obj_3d
         else:
-            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_val) + loss_obj
+            loss = loss_photo + loss_obj
 
         loss.backward()
         iter_end.record()
@@ -274,7 +336,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb, color_decoder=color_decoder, single_channel_mode=single_channel_mode, num_channels=num_channels)
+            training_report(iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), loss_obj_3d, use_wandb, color_decoder=color_decoder, single_channel_mode=single_channel_mode, num_channels=num_channels, disable_color=disable_color)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -341,7 +403,7 @@ def prepare_output_and_logger(args):
         cfg_log_f.write(str(Namespace(**vars(args))))
 
 
-def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None, single_channel_mode=False, num_channels=3):
+def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, loss_obj_3d, use_wandb, color_decoder=None, single_channel_mode=False, num_channels=3, disable_color=False):
 
     if use_wandb:
         log_dict = {"train_loss_patches/l1_loss": Ll1.item(), "train_loss_patches/total_loss": loss.item(), "iter_time": elapsed, "iter": iteration}
@@ -368,7 +430,7 @@ def training_report(iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, 
                 per_ch_counts = {ch: 0 for ch in range(num_channels)} if single_channel_mode else {}
 
                 for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, color_decoder=color_decoder)["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, override_color=color_override_tensor(scene.gaussians, num_channels, disable_color), color_decoder=color_decoder)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if use_wandb:
                         if idx < 5:
@@ -481,6 +543,9 @@ if __name__ == "__main__":
     args.single_channel_mode = config.get("single_channel_mode", False)
     args.num_channels = config.get("num_channels", 3)
     args.rgb_oversample_factor = config.get("rgb_oversample_factor", 1)
+    args.photometric_channels = config.get("photometric_channels", "")
+    args.photometric_loss_weight = config.get("photometric_loss_weight", 1.0)
+    args.disable_color = config.get("disable_color", False)
     if "densify_grad_threshold" in config:
         args.densify_grad_threshold = config["densify_grad_threshold"]
     

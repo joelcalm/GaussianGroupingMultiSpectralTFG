@@ -65,6 +65,8 @@ class ModelParams(ParamGroup):
         self.single_channel_mode = False
         self.num_channels = 3
         self.rgb_oversample_factor = 1
+        self.photometric_channels = ""
+        self.disable_color = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -104,6 +106,7 @@ class OptimizationParams(ParamGroup):
         self.reg3d_max_points = 300000
         self.reg3d_sample_size = 1000
         self.color_decoder_lr = 0.001
+        self.photometric_loss_weight = 1.0
 
         super().__init__(parser, "Optimization Parameters")
 

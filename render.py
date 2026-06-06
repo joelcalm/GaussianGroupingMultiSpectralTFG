@@ -25,6 +25,16 @@ from sklearn.decomposition import PCA
 from utils.color_decoder import ColorDecoder
 import json
 
+
+def color_override_tensor(gaussians, num_channels, disable_color):
+    if not disable_color:
+        return None
+    return torch.zeros(
+        (gaussians.get_xyz.shape[0], int(num_channels)),
+        dtype=gaussians.get_xyz.dtype,
+        device=gaussians.get_xyz.device,
+    )
+
 def clear_pngs(path):
     if not os.path.isdir(path):
         return
@@ -82,17 +92,21 @@ def visualize_obj(objects):
     return rgb_mask
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier, color_decoder=None, single_channel_mode=False, num_channels=3):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier, color_decoder=None, single_channel_mode=False, num_channels=3, disable_color=False):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     colormask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_feature16")
     gt_colormask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_objects_color")
     pred_obj_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_pred")
+    pred_obj_index_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_pred_index")
+    gt_obj_index_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_objects_index")
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     makedirs(colormask_path, exist_ok=True)
     makedirs(gt_colormask_path, exist_ok=True)
     makedirs(pred_obj_path, exist_ok=True)
+    makedirs(pred_obj_index_path, exist_ok=True)
+    makedirs(gt_obj_index_path, exist_ok=True)
 
     channel_paths = {}
     if single_channel_mode or num_channels > 3:
@@ -106,24 +120,29 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     frames_index = []
     channel_frames_index = {int(ch_id): [] for ch_id in channel_paths}
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        results = render(view, gaussians, pipeline, background, color_decoder=color_decoder)
+        results = render(view, gaussians, pipeline, background, override_color=color_override_tensor(gaussians, num_channels, disable_color), color_decoder=color_decoder)
         rendering = results["render"]
         rendering_obj = results["render_object"]
         
         logits = classifier(rendering_obj)
         pred_obj = torch.argmax(logits,dim=0)
-        pred_obj_mask = visualize_obj(pred_obj.cpu().numpy().astype(np.uint32))
+        pred_obj_np = pred_obj.cpu().numpy().astype(np.uint16)
+        pred_obj_mask = visualize_obj(pred_obj_np.astype(np.uint32))
         
         gt_objects = view.objects
         if gt_objects is not None:
-            gt_rgb_mask = visualize_obj(gt_objects.cpu().numpy().astype(np.uint32))
+            gt_obj_np = gt_objects.cpu().numpy().astype(np.uint16)
+            gt_rgb_mask = visualize_obj(gt_obj_np.astype(np.uint32))
         else:
+            gt_obj_np = np.zeros((view.image_height, view.image_width), dtype=np.uint16)
             gt_rgb_mask = np.zeros((view.image_height, view.image_width, 3), dtype=np.uint8)
 
         rgb_mask = feature_to_rgb(rendering_obj)
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(gt_rgb_mask).save(os.path.join(gt_colormask_path, '{0:05d}'.format(idx) + ".png"))
         Image.fromarray(pred_obj_mask).save(os.path.join(pred_obj_path, '{0:05d}'.format(idx) + ".png"))
+        Image.fromarray(pred_obj_np).save(os.path.join(pred_obj_index_path, '{0:05d}'.format(idx) + ".png"))
+        Image.fromarray(gt_obj_np).save(os.path.join(gt_obj_index_path, '{0:05d}'.format(idx) + ".png"))
         gt = view.original_image[:num_channels, :, :]
         active_channels = getattr(view, "active_channels", None)
         active_channels = active_channels.tolist() if active_channels is not None else list(range(gt.shape[0]))
@@ -217,12 +236,14 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         single_channel_mode = getattr(dataset, 'single_channel_mode', False)
         num_channels = getattr(dataset, 'num_channels', 3)
         num_objects = getattr(dataset, 'num_objects', 16)
+        disable_color = bool(getattr(dataset, 'disable_color', False))
         gaussians = GaussianModel(dataset.sh_degree, num_objects=num_objects, use_color_embed=use_color_embed, color_embed_dim=color_embed_dim)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         num_classes = dataset.num_classes
         print("Num classes: ",num_classes)
         print("Single channel mode: ", single_channel_mode)
+        print("Disable color render: ", disable_color)
 
         classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1)
         classifier.cuda()
@@ -248,12 +269,12 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         if not skip_train:
              train_views = filter_views(scene.getTrainCameras(), only_prefix, max_train_views)
              render_set(dataset.model_path, "train", scene.loaded_iter, train_views, gaussians, pipeline, background, classifier, color_decoder,
-                        single_channel_mode=single_channel_mode, num_channels=num_channels)
+                        single_channel_mode=single_channel_mode, num_channels=num_channels, disable_color=disable_color)
 
         if (not skip_test) and (len(scene.getTestCameras()) > 0):
              test_views = filter_views(scene.getTestCameras(), only_prefix, max_test_views)
              render_set(dataset.model_path, "test", scene.loaded_iter, test_views, gaussians, pipeline, background, classifier, color_decoder,
-                        single_channel_mode=single_channel_mode, num_channels=num_channels)
+                        single_channel_mode=single_channel_mode, num_channels=num_channels, disable_color=disable_color)
 
 if __name__ == "__main__":
     # Set up command line argument parser
