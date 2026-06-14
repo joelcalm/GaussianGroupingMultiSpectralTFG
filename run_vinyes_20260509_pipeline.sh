@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-cd /home/msiau/workspace/jcalm
+cd "$(dirname "$0")"
 mkdir -p logs
 
 PIPELINE_LOG="logs/vinyes_20260509_pipeline.log"

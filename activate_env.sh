@@ -60,9 +60,6 @@ export LD_LIBRARY_PATH=${TORCH_LIB}:${LD_LIBRARY_PATH}
 [ -d "$WSL_LIB" ] && export LD_LIBRARY_PATH=${WSL_LIB}:${LD_LIBRARY_PATH}
 
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-export PYTHONPATH=${SCRIPT_DIR}/submodules/diff-gaussian-rasterization:${SCRIPT_DIR}/submodules/simple-knn:${PYTHONPATH:-}
-
 # Auto-detect CUDA_HOME from nvcc location
 if command -v nvcc &>/dev/null; then
     export CUDA_HOME=$(dirname $(dirname $(which nvcc)))

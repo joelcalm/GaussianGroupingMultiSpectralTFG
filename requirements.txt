@@ -1,0 +1,11 @@
+numpy
+Pillow
+plyfile==0.8.1
+tqdm
+scipy
+wandb
+opencv-python
+scikit-learn
+lpips
+matplotlib
+scikit-image

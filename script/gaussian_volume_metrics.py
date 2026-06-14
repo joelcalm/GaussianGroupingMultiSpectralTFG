@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Estimate implicit-object volumes from a Gaussian Splatting PLY.
+"""Estimate object volumes and leaf surface areas from a Gaussian Splatting PLY.
 
 The volume is defined by thresholding the Gaussian density field:
 
     Omega = {x : rho(x) >= tau}
 
-This script implements three practical estimators for that thresholded object:
-voxel occupancy, Monte Carlo integration, and marching-cubes mesh volume.
+This script implements two practical volume estimators for that thresholded
+object: voxel occupancy and marching-cubes mesh volume. It also includes two
+leaf surface-area estimators: projected Gaussian ellipse rasterization and
+Poisson surface reconstruction.
 """
 
 from __future__ import annotations
@@ -181,11 +183,13 @@ def voxel_volume(
     density_mode: str,
     point_chunk: int,
     gaussian_chunk: int,
+    voxel_ply_path: Path | None = None,
 ) -> dict:
     shape = grid_shape(bbox_min, bbox_max, voxel_size)
     axes = [bbox_min[dim] + (np.arange(shape[dim], dtype=np.float64) + 0.5) * voxel_size for dim in range(3)]
     occupied = 0
     total = int(np.prod(shape))
+    occupied_centers = [] if voxel_ply_path is not None else None
 
     for x in axes[0]:
         yy, zz = np.meshgrid(axes[1], axes[2], indexing="ij")
@@ -196,9 +200,17 @@ def voxel_volume(
                 zz.ravel(),
             ]
         )
-        occupied += int(
-            np.count_nonzero(evaluate_density(points, scene, density_mode, point_chunk, gaussian_chunk) >= threshold)
-        )
+        occupied_mask = evaluate_density(points, scene, density_mode, point_chunk, gaussian_chunk) >= threshold
+        occupied += int(np.count_nonzero(occupied_mask))
+        if occupied_centers is not None and np.any(occupied_mask):
+            occupied_centers.append(points[occupied_mask])
+
+    if voxel_ply_path is not None:
+        if occupied_centers:
+            centers = np.concatenate(occupied_centers, axis=0)
+        else:
+            centers = np.empty((0, 3), dtype=np.float64)
+        write_point_cloud(voxel_ply_path, centers)
 
     return {
         "voxel_size_scene_units": float(voxel_size),
@@ -206,39 +218,7 @@ def voxel_volume(
         "sampled_voxel_count": total,
         "occupied_voxel_count": int(occupied),
         "volume_scene_units_cubed": float(occupied * voxel_size**3),
-    }
-
-
-def monte_carlo_volume(
-    scene: GaussianScene,
-    threshold: float,
-    bbox_min: np.ndarray,
-    bbox_max: np.ndarray,
-    sample_count: int,
-    seed: int,
-    density_mode: str,
-    point_chunk: int,
-    gaussian_chunk: int,
-) -> dict:
-    rng = np.random.default_rng(seed)
-    span = bbox_max - bbox_min
-    inside = 0
-    processed = 0
-    while processed < sample_count:
-        count = min(point_chunk, sample_count - processed)
-        points = bbox_min + rng.random((count, 3)) * span
-        inside += int(np.count_nonzero(evaluate_density(points, scene, density_mode, point_chunk, gaussian_chunk) >= threshold))
-        processed += count
-
-    fraction = inside / float(sample_count)
-    box_volume = float(np.prod(span))
-    return {
-        "sample_count": int(sample_count),
-        "seed": int(seed),
-        "inside_count": int(inside),
-        "inside_fraction": float(fraction),
-        "bbox_volume_scene_units_cubed": box_volume,
-        "volume_scene_units_cubed": float(box_volume * fraction),
+        "voxel_ply": None if voxel_ply_path is None else str(voxel_ply_path),
     }
 
 
@@ -336,6 +316,14 @@ def write_mesh(path: Path, vertices: np.ndarray, faces: np.ndarray) -> None:
     face_data = np.empty(faces.shape[0], dtype=[("vertex_indices", "i4", (3,))])
     face_data["vertex_indices"] = faces
     PlyData([PlyElement.describe(vertex_data, "vertex"), PlyElement.describe(face_data, "face")], text=False).write(path)
+
+
+def write_point_cloud(path: Path, points: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    vertex_data = np.empty(points.shape[0], dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")])
+    if points.size:
+        vertex_data["x"], vertex_data["y"], vertex_data["z"] = points[:, 0], points[:, 1], points[:, 2]
+    PlyData([PlyElement.describe(vertex_data, "vertex")], text=False).write(path)
 
 
 def pca_basis(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -481,12 +469,12 @@ def poisson_leaf_area(
     pcd.points = o3d.utility.Vector3dVector(scene.xyz)
     pcd.normals = o3d.utility.Vector3dVector(gaussian_normals_from_smallest_axis(scene))
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=depth)
-    bbox = pcd.get_axis_aligned_bounding_box()
-    mesh = mesh.crop(bbox)
     densities = np.asarray(densities)
     if densities.size and density_quantile > 0.0:
         threshold = np.quantile(densities, density_quantile)
         mesh.remove_vertices_by_mask(densities < threshold)
+    bbox = pcd.get_axis_aligned_bounding_box()
+    mesh = mesh.crop(bbox)
     mesh.remove_unreferenced_vertices()
     mesh.compute_vertex_normals()
 
@@ -610,16 +598,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ply", required=True, help="Gaussian Splatting PLY with x/y/z, opacity, scale_*, rot_* fields.")
     parser.add_argument("--out", required=True, help="Output JSON report path.")
     parser.add_argument("--mesh-ply", help="Optional marching-cubes mesh PLY output path.")
+    parser.add_argument("--voxel-ply", help="Optional occupied-voxel center point-cloud PLY output path.")
     parser.add_argument("--poisson-mesh-ply", help="Optional Poisson leaf mesh PLY output path.")
-    parser.add_argument("--methods", nargs="+", default=["voxel", "monte_carlo", "marching_cubes"])
+    parser.add_argument("--methods", nargs="+", default=["voxel", "marching_cubes"])
     parser.add_argument("--density-mode", choices=["amplitude", "normalized"], default="amplitude")
     parser.add_argument("--threshold", default="auto", help="Density threshold tau, or 'auto'.")
     parser.add_argument("--threshold-percentile", type=float, default=10.0)
     parser.add_argument("--grid-resolution", type=int, default=96, help="Voxel count along the longest bbox axis.")
     parser.add_argument("--voxel-size", type=float, help="Override --grid-resolution with an explicit scene-unit voxel size.")
     parser.add_argument("--bbox-sigma", type=float, default=3.0, help="Extend bbox by this many max Gaussian scales.")
-    parser.add_argument("--mc-samples", type=int, default=200000)
-    parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--point-chunk", type=int, default=8192)
     parser.add_argument("--gaussian-chunk", type=int, default=2048)
     parser.add_argument("--min-opacity", type=float, default=0.0)
@@ -638,7 +625,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     methods = set(args.methods)
-    valid_methods = {"voxel", "monte_carlo", "marching_cubes", "analytical_leaf_area", "poisson_leaf_area"}
+    valid_methods = {"voxel", "marching_cubes", "analytical_leaf_area", "poisson_leaf_area"}
     unknown = sorted(methods - valid_methods)
     if unknown:
         raise ValueError(f"Unknown methods: {', '.join(unknown)}")
@@ -688,23 +675,10 @@ def main() -> None:
             args.density_mode,
             args.point_chunk,
             args.gaussian_chunk,
+            None if args.voxel_ply is None else Path(args.voxel_ply),
         )
         attach_metric_value(method_report, "volume_scene_units_cubed", 3, "volume_m3", scale_context)
         report["methods"]["voxel"] = method_report
-    if "monte_carlo" in methods:
-        method_report = monte_carlo_volume(
-            scene,
-            threshold,
-            bbox_min,
-            bbox_max,
-            args.mc_samples,
-            args.seed,
-            args.density_mode,
-            args.point_chunk,
-            args.gaussian_chunk,
-        )
-        attach_metric_value(method_report, "volume_scene_units_cubed", 3, "volume_m3", scale_context)
-        report["methods"]["monte_carlo"] = method_report
     if "marching_cubes" in methods:
         method_report = marching_cubes_volume(
             scene,

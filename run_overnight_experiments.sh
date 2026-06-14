@@ -1,13 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+cd "$(dirname "$0")"
 
 source activate_env.sh
 
 set -euo pipefail
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
-OUTPUT_ROOT="../../data/tmp/jcalm/output"
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 
 EXPERIMENTS=(
     "exp_a_capped_longer_densify:exp_a_capped_longer_densify"

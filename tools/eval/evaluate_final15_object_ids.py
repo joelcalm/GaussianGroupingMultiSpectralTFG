@@ -120,6 +120,66 @@ def label_metrics(gt: np.ndarray, pred_mapped: np.ndarray, labels: list[int]) ->
     return rows, macro
 
 
+def default_class_map_path(gt_dir: Path, label_mode: str) -> Path | None:
+    eval_dir = gt_dir.parent
+    candidates = (
+        ["hybrid_label_map.json", "stable_eval_label_map.json"]
+        if label_mode == "all_gt"
+        else ["stable_eval_label_map.json", "hybrid_label_map.json"]
+    )
+    for name in candidates:
+        path = eval_dir / name
+        if path.exists():
+            return path
+    return None
+
+
+def load_class_labels(path: Path | None) -> dict[int, str]:
+    if path is None:
+        return {}
+    raw = json.loads(path.read_text())
+    labels = {}
+    for key, row in raw.items():
+        try:
+            label_id = int(key)
+        except ValueError:
+            continue
+        class_name = row.get("class_name")
+        class_id = row.get("class_id")
+        if class_name:
+            labels[label_id] = str(class_name)
+        elif class_id is not None:
+            labels[label_id] = str(class_id)
+    return labels
+
+
+def class_metrics(gt: np.ndarray, pred_mapped: np.ndarray, label_to_class: dict[int, str]) -> tuple[dict[str, dict], dict]:
+    if not label_to_class:
+        return {}, {"miou": None, "mdice": None}
+
+    gt_class = np.array([label_to_class.get(int(v), "__unknown__") for v in gt], dtype=object)
+    pred_class = np.array([label_to_class.get(int(v), "__background__") for v in pred_mapped], dtype=object)
+    classes = sorted({str(v) for v in gt_class if v not in {"background", "__unknown__"}})
+
+    rows = {}
+    ious, dices = [], []
+    for cls in classes:
+        g = gt_class == cls
+        p = pred_class == cls
+        inter = int(np.logical_and(g, p).sum())
+        union = int(np.logical_or(g, p).sum())
+        gsum = int(g.sum())
+        psum = int(p.sum())
+        iou = inter / union if union else None
+        dice = (2 * inter) / (gsum + psum) if (gsum + psum) else None
+        rows[cls] = {"gt_pixels": gsum, "pred_pixels": psum, "intersection": inter, "union": union, "iou": iou, "dice": dice}
+        if gsum > 0:
+            ious.append(0.0 if iou is None else iou)
+            dices.append(0.0 if dice is None else dice)
+    macro = {"miou": float(np.mean(ious)) if ious else None, "mdice": float(np.mean(dices)) if dices else None}
+    return rows, macro
+
+
 def evaluate_model(
     model_path: Path,
     gt_dir: Path,
@@ -184,16 +244,17 @@ def evaluate_model(
     pred_index = {pid: i for i, pid in enumerate(pred_ids)}
     gt_index = {lab: i for i, lab in enumerate(labels)}
 
-    intersections = np.zeros((len(labels), len(pred_ids)), dtype=np.float64)
-    gt_sizes = np.zeros(len(labels), dtype=np.float64)
-    pred_sizes = np.zeros(len(pred_ids), dtype=np.float64)
-    for lab in labels:
-        gt_sizes[gt_index[lab]] = np.count_nonzero(gt_cat == lab)
-    for pid in pred_ids:
-        pred_sizes[pred_index[pid]] = np.count_nonzero(pred_cat == pid)
-    for lab in labels:
-        for pid in pred_ids:
-            intersections[gt_index[lab], pred_index[pid]] = np.count_nonzero((gt_cat == lab) & (pred_cat == pid))
+    if labels and pred_ids and gt_cat.size:
+        gt_codes = np.fromiter((gt_index[int(v)] for v in gt_cat), dtype=np.int64, count=gt_cat.size)
+        pred_codes = np.fromiter((pred_index[int(v)] for v in pred_cat), dtype=np.int64, count=pred_cat.size)
+        flat_codes = gt_codes * len(pred_ids) + pred_codes
+        intersections = np.bincount(flat_codes, minlength=len(labels) * len(pred_ids)).reshape(len(labels), len(pred_ids)).astype(np.float64)
+        gt_sizes = np.bincount(gt_codes, minlength=len(labels)).astype(np.float64)
+        pred_sizes = np.bincount(pred_codes, minlength=len(pred_ids)).astype(np.float64)
+    else:
+        intersections = np.zeros((len(labels), len(pred_ids)), dtype=np.float64)
+        gt_sizes = np.zeros(len(labels), dtype=np.float64)
+        pred_sizes = np.zeros(len(pred_ids), dtype=np.float64)
     unions = gt_sizes[:, None] + pred_sizes[None, :] - intersections
     iou_matrix = np.divide(intersections, unions, out=np.zeros_like(intersections), where=unions > 0)
 
@@ -222,6 +283,9 @@ def evaluate_model(
     hard_ce = float(np.mean(np.where(correct, -np.log(1 - eps), -np.log(eps / max(1, k - 1))))) if correct.size else 0.0
 
     per_label, macro = label_metrics(gt_cat, pred_mapped, labels)
+    class_map_path = default_class_map_path(gt_dir, label_mode)
+    label_to_class = load_class_labels(class_map_path)
+    per_class, class_macro = class_metrics(gt_cat, pred_mapped, label_to_class)
     consistency_rows = {}
     consistency_scores = []
     for lab in labels:
@@ -250,14 +314,18 @@ def evaluate_model(
         "visualization_dirs": visualization_dirs,
         "label_mode": label_mode,
         "label_ids": labels,
+        "class_map_path": str(class_map_path) if class_map_path else None,
         "pred_to_gt_hungarian": {str(k): int(v) for k, v in pred_to_gt.items()},
         "gt_to_pred_hungarian": {str(k): int(v) for k, v in gt_to_pred.items()},
         "metrics": {
             "mIoU": macro["miou"],
             "Dice_Coefficient_F1": macro["mdice"],
+            "class_mIoU": class_macro["miou"],
+            "class_Dice_Coefficient_F1": class_macro["mdice"],
             "pixel_accuracy": pixel_accuracy,
         },
         "per_label": {str(k): v for k, v in per_label.items()},
+        "per_class": per_class,
         "id_consistency_per_label": {str(k): v for k, v in consistency_rows.items()},
         "per_frame": per_frame,
     }

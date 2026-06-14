@@ -117,6 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--abs_pose_min_num_inliers", type=int, default=50, help="Minimum 2D-3D inliers for registering a new image.")
     parser.add_argument("--abs_pose_max_error", type=float, default=4.0, help="Maximum absolute pose reprojection error for registering a new image.")
     parser.add_argument("--max_num_matches", type=int, default=32768)
+    parser.add_argument("--matching_num_threads", type=int, default=16, help="COLMAP SiftMatching.num_threads cap for memory-sensitive matching.")
     parser.add_argument("--guided_matching", type=int, default=1)
     parser.add_argument("--matching_use_gpu", type=int, default=0, help="Use GPU for COLMAP matching. Defaults to 0 because headless GPU matching can require an OpenGL context.")
     parser.add_argument("--mapper_min_model_size", type=int, default=30)
@@ -524,10 +525,11 @@ def run_matching(args: argparse.Namespace, colmap: Path, output_dir: Path) -> No
         "--match_list_path", pairs,
         "--match_type", "pairs",
         "--SiftMatching.use_gpu", str(args.matching_use_gpu),
+        "--SiftMatching.num_threads", str(args.matching_num_threads),
         "--SiftMatching.gpu_index", args.gpu_index,
         "--SiftMatching.max_num_matches", str(args.max_num_matches),
-        "--SiftMatching.min_num_inliers", str(args.min_num_inliers),
         "--SiftMatching.guided_matching", str(args.guided_matching),
+        "--TwoViewGeometry.min_num_inliers", str(args.min_num_inliers),
     ], dry_run=args.dry_run)
 
 
@@ -594,6 +596,7 @@ def run_rgb_matching_variant(args: argparse.Namespace, colmap: Path, *, db: Path
         "exhaustive_matcher" if matcher_type == "exhaustive" else "sequential_matcher",
         "--database_path", db,
         "--SiftMatching.use_gpu", str(args.matching_use_gpu),
+            "--SiftMatching.num_threads", str(args.matching_num_threads),
         "--SiftMatching.gpu_index", args.gpu_index,
         "--SiftMatching.max_num_matches", str(args.max_num_matches),
         "--SiftMatching.guided_matching", str(args.guided_matching),
@@ -601,7 +604,7 @@ def run_rgb_matching_variant(args: argparse.Namespace, colmap: Path, *, db: Path
     if matcher_type == "sequential_loop":
         base.extend([
             "--SequentialMatching.overlap", str(args.sequential_overlap),
-            "--SequentialMatching.loop_detection", "1",
+            "--SequentialMatching.loop_detection", "0",
         ])
     run(base, dry_run=args.dry_run)
 
@@ -1096,10 +1099,11 @@ def prepare_selected_database_for_registration(args: argparse.Namespace, colmap:
             "--match_list_path", pairs,
             "--match_type", "pairs",
             "--SiftMatching.use_gpu", str(args.matching_use_gpu),
+            "--SiftMatching.num_threads", str(args.matching_num_threads),
             "--SiftMatching.gpu_index", args.gpu_index,
             "--SiftMatching.max_num_matches", str(args.max_num_matches),
-            "--SiftMatching.min_num_inliers", str(args.min_num_inliers),
             "--SiftMatching.guided_matching", str(args.guided_matching),
+            "--TwoViewGeometry.min_num_inliers", str(args.min_num_inliers),
         ], dry_run=args.dry_run)
     return db
 
@@ -1238,6 +1242,7 @@ def write_register_config(args: argparse.Namespace, output_dir: Path) -> None:
         "min_num_inliers": args.min_num_inliers,
         "guided_matching": args.guided_matching,
         "matching_use_gpu": args.matching_use_gpu,
+        "matching_num_threads": args.matching_num_threads,
         "use_gpu": 1,
         "gpu_index": str(args.gpu_index),
         "grayscale_colmap_bands": args.grayscale_colmap_bands,

@@ -1,82 +1,124 @@
-# Gaussian Grouping [ECCV'24]
+# Instance-Aware Multispectral 3D Gaussian Splatting for Vineyards
 
-> [**Gaussian Grouping: Segment and Edit Anything in 3D Scenes**](https://arxiv.org/abs/2312.00732)           
-> [[Project Page]](https://ymq2017.github.io/gaussian-grouping)           
-> ECCV 2024  
-> ETH Zurich
+This repository contains the implementation developed for the TFG **Instance-Aware Multispectral Representation of Vineyards with 3D Gaussian Splatting**. It extends [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping) with:
 
-We propose Gaussian Grouping, which extends Gaussian Splatting to jointly **reconstruct** and **segment** anything in open-world 3D scenes via **lifting 2D SAM**. It also efficiently supports versatile 3D scene **editing** tasks. Refer to our [paper](https://arxiv.org/abs/2312.00732) for more details.
+- learned per-Gaussian RGB and multispectral appearance;
+- active-channel supervision for images that observe only part of the spectrum;
+- class-aware instance features supervised with tracked SAM3 masks; and
+- plant-level extraction and approximate trunk-volume and canopy-area measurements.
 
-<img width="1000" alt="image" src='media/teaser_github_demo.gif'>
+The complete workflow is:
 
-Updates
------------------
-:fire::fire: 2024/01/16: We released the [LERF-Mask dataset](docs/dataset.md) and evaluation code.
+`dataset preparation -> COLMAP/camera setup -> SAM3 masks -> training -> rendering/evaluation -> plant measurements`
 
-2024/01/06: We released the [3D Object Removal & Inpainting](docs/edit_removal_inpaint.md) code.
+> Plant measurements are feasibility-study estimates. They depend on registration, mask quality, scale calibration, density thresholds, and reconstruction completeness.
 
-2023/12/20: We released the [Install Notes](docs/install.md) and [Training & Rendering](docs/train.md) code.
+## Method
 
+Each Gaussian stores geometry, opacity, a learned appearance embedding, and an object feature. A small decoder maps the appearance embedding to RGB and narrow-band channels. During training, the photometric loss is evaluated only on channels available for the current view, while 2D masks and a 3D neighborhood regularizer supervise object predictions.
 
-# Introduction
-The recent Gaussian Splatting achieves high-quality and real-time novel-view synthesis of the 3D scenes. However, it is solely concentrated on the appearance and geometry modeling, while lacking in fine-grained object-level scene understanding. To address this issue, we propose Gaussian Grouping, which extends Gaussian Splatting to jointly reconstruct and segment anything in open-world 3D scenes. We augment each Gaussian with a compact Identity Encoding, allowing the Gaussians to be grouped according to their object instance or stuff membership in the 3D scene. Instead of resorting to expensive 3D labels, we supervise the Identity Encodings during the differentiable rendering by leveraging the 2D mask predictions by SAM, along with introduced 3D spatial consistency regularization. Comparing to the implicit NeRF representation, we show that the discrete and grouped 3D Gaussians can reconstruct, segment and edit anything in 3D with high visual quality, fine granularity and efficiency. Based on Gaussian Grouping, we further propose a local Gaussian Editing scheme, which shows efficacy in versatile scene editing applications, including 3D object removal, inpainting, colorization and scene recomposition.
+<p align="center">
+  <img src="docs/assets/vineyard_reconstructions.png" width="92%" alt="Representative vineyard RGB reconstructions">
+</p>
 
-<img width="1096" alt="image" src='media/github_method.png'>
+The vineyard model predicts ten channels:
 
-# Application Overview
-**Local Gaussian Editing scheme**: Grouped Gaussians after training. Each group represents a specific instance / stuff of the 3D scene and can be fully decoupled.
-<img width="1096" alt="image" src='media/editing_operation.png'>
+`R, G, B, 470, 505, 525, 590, 635, 660, 850 nm`
 
-## 3D Object Removal
-Our Gaussian Grouping can remove the large-scale objects on the Tanks & Temples dataset, from the whole 3D scene with greatly reduced artifacts. Zoom for better view.
+<p align="center">
+  <img src="docs/assets/plant_measurements.png" width="72%" alt="Plant-level Gaussian measurement visualizations">
+</p>
 
-https://github.com/lkeab/gaussian-grouping/assets/17427852/f3b0f964-a610-49ab-8332-f2caa64fbf45
+## Quick Start
 
-## 3D Object Inpainting
-Comparison on 3D object inpainting cases, where SPIn-NeRF requires 5h training while our method with better inpainting quality only needs 1 hour training and 20 minutes tuning.
-
-https://github.com/lkeab/gaussian-grouping/assets/17427852/9f5050da-6a50-4a5f-a755-3bdc55eab1bc
-
-https://github.com/lkeab/gaussian-grouping/assets/17427852/3ed0203c-0047-4333-8bf0-0c10f5a078d1
-
-## 3D Object Style Transfer
-Comparison on 3D object style transfer cases, Our Gaussian Grouping produces more coherent and natural transfer results across views, with faithfully preserved background.
-
-https://github.com/lkeab/gaussian-grouping/assets/17427852/2f00eab5-590b-4295-bb1c-2076acc63d4a
-
-## 3D Open-world Segmentation
-Our Gaussian Grouping approach jointly reconstructs and segments anything in full open-world 3D scenes. The masks predicted by Gaussian Grouping contains much sharp and accurate boundary than LERF.
-
-https://github.com/lkeab/gaussian-grouping/assets/60028943/38241b99-1497-4a7c-bd22-5b018b85548c
-
-
-
-## 3D Multi-Object Editing
-Our Gaussian Grouping approach jointly reconstructs and segments anything in full open-world 3D scenes. Then we concurrently perform 3D object editing for several objects.
-
-https://github.com/lkeab/gaussian-grouping/assets/17427852/d9638a1c-1569-4c72-91b9-ee68e9e017e5
-
-# Installation
-You can refer to the [install document](./docs/install.md) to build the Python environment.
-
-# Training and Masks Rendering
-Then refer to the [train document](./docs/train.md) to train your own scene.
-
-# Open-Vocabulary Segmentation
-For evaluation on the **LERF-Mask dataset** proposed in our paper, you can refer to the [dataset document](./docs/dataset.md).
-
-# 3D Object Removal and Inpainting
-You can select the 3D object for removal and inpainting after training. Details are in the [edit removal inpaint document](./docs/edit_removal_inpaint.md).
-
-
-Citation
----------------
-If you find Gaussian Grouping useful in your research or refer to the provided baseline results, please star :star: this repository and consider citing :pencil::
+```bash
+conda create -n gaussian_grouping python=3.8 -y
+conda activate gaussian_grouping
+conda install pytorch==1.12.1 torchvision==0.13.1 \
+  torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch
+pip install -r requirements.txt
+pip install submodules/diff-gaussian-rasterization
+pip install submodules/simple-knn
 ```
-@inproceedings{gaussian_grouping,
-    title={Gaussian Grouping: Segment and Edit Anything in 3D Scenes},
-    author={Ye, Mingqiao and Danelljan, Martin and Yu, Fisher and Ke, Lei},
-    booktitle={ECCV},
-    year={2024}
-}
+
+See [installation](docs/installation.md) for CUDA-extension, COLMAP, and SAM3 notes.
+
+### Bear RGB
+
+Download Bear from the [Gaussian Grouping data repository](https://huggingface.co/mqye/Gaussian-Grouping/tree/main/data), place it at `data/bear`, then run:
+
+```bash
+python train.py -s data/bear -m output/bear_rgb \
+  --config_file config/train_color_embed.json \
+  --iterations 30000 --eval
 ```
+
+### Basement multispectral
+
+After preparing the scene at `data/basement`:
+
+```bash
+python train.py -s data/basement -m output/basement_ms \
+  --config_file config/gaussian_dataset/train_mms.json \
+  --iterations 30000 --eval -r 2
+```
+
+The Basement dataset was provided by **Arnau Marcos Almansa**.
+
+### Vineyard RGB + multispectral
+
+```bash
+python train.py -s data/vinyes_sam3_200 \
+  -m output/vinyes_sam3_200 \
+  --config_file config/gaussian_dataset/vinyes_sam3_200.json \
+  --iterations 30000 --resolution 4 --eval --train_split
+```
+
+The vineyard scenes were captured and provided by **Felipe Lumbreras Ruiz** in the context of the VINIA project.
+
+### Render and evaluate
+
+```bash
+python render.py -m output/vinyes_sam3_200 \
+  --iteration 30000 --skip_train --only_prefix rgb
+
+python metrics.py -m output/vinyes_sam3_200
+```
+
+Models, renders, and metrics are written below `output/<run-name>`. Both `data/` and `output/` are intentionally ignored by Git.
+
+## Documentation
+
+- [Installation](docs/installation.md)
+- [Data preparation](docs/data_preparation.md)
+- [Training](docs/training.md)
+- [SAM3 masks](docs/sam3_masks.md)
+- [Rendering and evaluation](docs/evaluation.md)
+
+## Repository Structure
+
+```text
+.
+|-- train.py, render.py, metrics.py     Core entry points
+|-- scene/                              Cameras, COLMAP readers, Gaussian model
+|-- gaussian_renderer/                  Differentiable renderer integration
+|-- arguments/ and utils/               Configuration, losses, shared utilities
+|-- config/                             Training, SAM3, experiment configurations
+|-- script/                             Reproducible and experiment wrappers
+|-- tools/                              Evaluation and mask/temporal utilities
+|-- docs/                               User documentation and research notes
+|-- submodules/                         CUDA rasterizer and nearest-neighbor extensions
+|-- Tracking-Anything-with-DEVA/        Upstream tracking dependency
+|-- lama/                               Upstream inpainting dependency
+|-- data/                               Local datasets (ignored)
+|-- output/                             Models and results (ignored)
+`-- outputs/                            Report sources/build products (ignored)
+```
+
+The final report is maintained locally under `outputs/`; it is not required to run the code and remains excluded from Git.
+
+## Acknowledgements
+
+This implementation builds on [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) and [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping). Their notices and licenses are retained in the corresponding source and third-party directories.
+
+This work was developed in the VINIA project, funded by the Generalitat de Catalunya, Departament d'Agricultura, Ramaderia, Pesca i Alimentacio, Activitats de Demostracio (`ACC_2023_EXP_SIA002_40_0001658`).

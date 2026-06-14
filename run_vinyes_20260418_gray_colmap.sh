@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/msiau/workspace/jcalm
+cd "$(dirname "$0")"
+set +u
+source activate_env.sh
+set -u
 
-exec /home/msiau/workspace/.conda/envs/gaussian_grouping/bin/python \
+exec python \
   script/rebuild_gray_colmap_from_scene.py \
   --source_scene data/vinyes_fulles_1 \
   --output_scene data/vinyes_20260418 \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-cd /home/msiau/workspace/jcalm
+cd "$(dirname "$0")/.."
 set +u
 source activate_env.sh
 set -u

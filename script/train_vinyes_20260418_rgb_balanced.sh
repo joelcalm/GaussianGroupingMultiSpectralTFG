@@ -6,8 +6,6 @@ set +u
 source activate_env.sh
 set -u
 
-export PYTHONPATH="submodules/diff-gaussian-rasterization:submodules/simple-knn/build/lib.linux-x86_64-cpython-38:${PYTHONPATH:-}"
-
 python train.py \
   -s data/vinyes_20260418_rgb_colmap_shared \
   -m output/vinyes_20260418_rgb_balanced \

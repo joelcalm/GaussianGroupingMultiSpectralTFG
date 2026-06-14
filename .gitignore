@@ -9,11 +9,14 @@ result/
 tests/
 logs/
 weights/
+figures/
+scripts/
 
 # Python cache
 __pycache__/
 *.py[cod]
 *.pyo
+*.so
 
 # Build artifacts (submodules)
 submodules/diff-gaussian-rasterization/build/
