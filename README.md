@@ -37,13 +37,13 @@ R, G, B, 470, 505, 525, 590, 635, 660, 850 nm
 Object supervision is provided by tracked SAM 3 masks. These masks transfer class-aware instance information from 2D views into the 3D Gaussian representation, allowing components such as trunks, canopy, ground, and support structures to be selected directly in 3D.
 
 <p align="center">
-  <img src="docs/assets/sam3_figure.png" width="92%" alt="SAM 3 masks and 3D object-feature supervision">
+  <img src="docs/assets/sam3_figure.png" width="95%" alt="SAM 3 masks and 3D object-feature supervision">
 </p>
 
 After training, the model can render RGB views, individual narrow-band views, full multispectral outputs, and object-label predictions from novel viewpoints. Object predictions can also be applied directly at the Gaussian level, which makes it possible to isolate plant components in 3D and use them for approximate geometric measurements.
 
 <p align="center">
-  <img src="docs/assets/measurement_pipeline.png" width="92%" alt="Plant-level Gaussian measurement visualizations">
+  <img src="docs/assets/measurement_pipeline.png" width="95%" alt="Plant-level Gaussian measurement visualizations">
 </p>
 
 ## Main Results
@@ -135,7 +135,6 @@ Both `data/` and `output/` are intentionally ignored by Git.
 ## Repository Structure
 
 ```text
-.
 |-- train.py, render.py, metrics.py     Core training, rendering, and evaluation entry points
 |-- scene/                              Cameras, COLMAP readers, and Gaussian model definitions
 |-- gaussian_renderer/                  Differentiable Gaussian renderer integration
