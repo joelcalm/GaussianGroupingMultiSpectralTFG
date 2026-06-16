@@ -53,13 +53,7 @@ The prepared scene should contain `images/`, `object_mask/`, and `sparse/0/`.
 
 The Basement dataset was provided by **Arnau Marcos Almansa**. It contains complete nine-channel observations at shared camera poses and is used as the controlled multispectral validation scene.
 
-Use `prepare_mms_dataset.py` to convert the source capture into the repository's COLMAP-style representation:
-
-```bash
-python prepare_mms_dataset.py --help
-```
-
-Place the result at `data/basement` for the documented commands, or substitute its actual path with `-s`.
+Place the prepared COLMAP-style Basement scene at `data/basement` for the documented commands, or substitute its actual path with `SCENE_DIR=/path/to/basement` when invoking `script/train.sh`.
 
 ## Vineyard Scenes
 
@@ -68,8 +62,8 @@ The vineyard RGB and narrow-band videos were captured and provided by **Felipe L
 Preparation consists of:
 
 1. sampling RGB and narrow-band video frames;
-2. building or importing a shared COLMAP reconstruction;
-3. exporting an undistorted training scene;
+2. building a shared COLMAP reconstruction with `prepare_vineyard_video_colmap.py`;
+3. registering narrow-band frames into the selected RGB COLMAP model;
 4. generating SAM3 masks on ordered RGB frames;
 5. composing class-aware instance masks and active-channel metadata; and
 6. auditing the registered trajectory before training.
@@ -78,11 +72,10 @@ Relevant entry points:
 
 ```bash
 python prepare_vineyard_video_colmap.py --help
-python script/prepare_undistorted_pinhole_scene.py --help
 python compose_hierarchical_vineyard_labels.py --help
 ```
 
-The `run_vinyes_*.sh` files record specific experimental runs. Prefer the Python entry points and portable commands documented here when adapting the pipeline to another dataset.
+Use `script/train.sh` for the reported training runs. Prefer the Python entry points and portable commands documented here when adapting the preparation pipeline to another dataset.
 
 ## Train/Test Split
 

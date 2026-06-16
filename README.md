@@ -48,9 +48,7 @@ See [installation](docs/installation.md) for CUDA-extension, COLMAP, and SAM3 no
 Download Bear from the [Gaussian Grouping data repository](https://huggingface.co/mqye/Gaussian-Grouping/tree/main/data), place it at `data/bear`, then run:
 
 ```bash
-python train.py -s data/bear -m output/bear_rgb \
-  --config_file config/train_color_embed.json \
-  --iterations 30000 --eval
+bash script/train.sh bear_rgb
 ```
 
 ### Basement multispectral
@@ -58,9 +56,7 @@ python train.py -s data/bear -m output/bear_rgb \
 After preparing the scene at `data/basement`:
 
 ```bash
-python train.py -s data/basement -m output/basement_ms \
-  --config_file config/gaussian_dataset/train_mms.json \
-  --iterations 30000 --eval -r 2
+bash script/train.sh basement_all9
 ```
 
 The Basement dataset was provided by **Arnau Marcos Almansa**.
@@ -68,10 +64,7 @@ The Basement dataset was provided by **Arnau Marcos Almansa**.
 ### Vineyard RGB + multispectral
 
 ```bash
-python train.py -s data/vinyes_sam3_200 \
-  -m output/vinyes_sam3_200 \
-  --config_file config/gaussian_dataset/vinyes_sam3_200.json \
-  --iterations 30000 --resolution 4 --eval --train_split
+bash script/train.sh vines_20260509_rgb_ms
 ```
 
 The vineyard scenes were captured and provided by **Felipe Lumbreras Ruiz** in the context of the VINIA project.
@@ -79,10 +72,10 @@ The vineyard scenes were captured and provided by **Felipe Lumbreras Ruiz** in t
 ### Render and evaluate
 
 ```bash
-python render.py -m output/vinyes_sam3_200 \
+python render.py -m output/vines_20260509_rgb_ms \
   --iteration 30000 --skip_train --only_prefix rgb
 
-python metrics.py -m output/vinyes_sam3_200
+python metrics.py -m output/vines_20260509_rgb_ms
 ```
 
 Models, renders, and metrics are written below `output/<run-name>`. Both `data/` and `output/` are intentionally ignored by Git.
@@ -108,8 +101,6 @@ Models, renders, and metrics are written below `output/<run-name>`. Both `data/`
 |-- tools/                              Evaluation and mask/temporal utilities
 |-- docs/                               User documentation and research notes
 |-- submodules/                         CUDA rasterizer and nearest-neighbor extensions
-|-- Tracking-Anything-with-DEVA/        Upstream tracking dependency
-|-- lama/                               Upstream inpainting dependency
 |-- data/                               Local datasets (ignored)
 |-- output/                             Models and results (ignored)
 `-- outputs/                            Report sources/build products (ignored)

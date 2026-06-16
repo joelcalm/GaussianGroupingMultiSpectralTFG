@@ -1,61 +1,52 @@
 # Training
 
-All experiments use `train.py` with a JSON configuration. Command-line arguments define scene/output paths and run length; JSON files define channels, representation capacity, regularization, and experiment variants.
+All reported experiments use `train.py` with a JSON configuration. The portable entry point is `script/train.sh`, which selects the matching scene path, output path, and config for each reported run while still allowing extra `train.py` arguments at the end.
 
-## Bear RGB Validation
-
-```bash
-python train.py \
-  -s data/bear \
-  -m output/bear_rgb \
-  --config_file config/train_color_embed.json \
-  --iterations 30000 \
-  --test_iterations 1000 7000 30000 \
-  --save_iterations 7000 30000 \
-  --eval
-```
-
-The original Gaussian Grouping baseline remains available as `bash script/train.sh bear 1`.
-
-## Basement Multispectral Validation
+## Reported Runs
 
 ```bash
-python train.py \
-  -s data/basement \
-  -m output/basement_ms \
-  --config_file config/gaussian_dataset/train_mms.json \
-  --iterations 30000 \
-  --test_iterations 1000 7000 30000 \
-  --save_iterations 7000 30000 \
-  --eval -r 2
+bash script/train.sh bear_rgb
+bash script/train.sh bear_rgb_round_robin
+bash script/train.sh basement_all9
+bash script/train.sh basement_round_robin_9
+bash script/train.sh vines_20260321_rgb_ms
+bash script/train.sh vines_20260418_rgb_ms
+bash script/train.sh vines_20260509_rgb_ms
+bash script/train.sh vines_20260509_object_no_color
+bash script/train.sh vines_20260509_object_rgb
+bash script/train.sh vines_20260509_object_ms
+bash script/train.sh vines_20260509_object_rgb_ms
 ```
 
-Round-robin partial-channel experiments use a config with `single_channel_mode: true`; the model still predicts every configured output channel.
-
-## Vineyard RGB + Multispectral
+The wrapper accepts these environment overrides:
 
 ```bash
-python train.py \
-  -s data/vinyes_sam3_200 \
-  -m output/vinyes_sam3_200 \
-  --config_file config/gaussian_dataset/vinyes_sam3_200.json \
-  --iterations 30000 \
-  --test_iterations 1000 10000 30000 \
-  --save_iterations 10000 30000 \
-  --resolution 4 \
-  --eval --train_split
+SCENE_DIR=/path/to/scene MODEL_DIR=output/custom ITERATIONS=30000 bash script/train.sh vines_20260509_rgb_ms
 ```
 
-The May 2026 RGB/MS comparison uses:
+Additional arguments are passed through to `train.py`:
 
-- `vinyes_20260509_pinhole_no_color.json`
-- `vinyes_20260509_pinhole_rgb.json`
-- `vinyes_20260509_pinhole_ms.json`
-- `vinyes_20260509_pinhole_rgb_ms.json`
+```bash
+bash script/train.sh vines_20260509_rgb_ms --allow_bad_colmap
+```
 
-The historical four-run wrapper is `script/run_vinyes_20260509_pinhole_hybrid_4experiments.sh`. Review its local paths and environment variables before use.
+## Config Layout
 
-Those May pinhole ablation configs allocate ten decoder outputs but currently supervise channels `0-8`: RGB plus the six registered narrow bands from 470 to 660 nm. Use `vinyes_sam3_200.json` with a prepared `b850_` group for the full ten-channel example above.
+Configs live directly under `config/gaussian_dataset`:
+
+- `bear_rgb.json`
+- `bear_rgb_round_robin.json`
+- `basement_all9.json`
+- `basement_round_robin_9.json`
+- `vines_20260321_rgb_ms.json`
+- `vines_20260418_rgb_ms.json`
+- `vines_20260509_rgb_ms.json`
+- `vines_20260509_object_no_color.json`
+- `vines_20260509_object_rgb.json`
+- `vines_20260509_object_ms.json`
+- `vines_20260509_object_rgb_ms.json`
+
+The May object-comparison configs share the same capacity and regularization settings; only `use_color_embed`, `disable_color`, and `photometric_channels` change between no-color, RGB, MS, and RGB+MS.
 
 ## Important Options
 

@@ -1,0 +1,107 @@
+{
+    "class_map": {
+        "background": 0,
+        "table": 1,
+        "colors_panel": 2,
+        "iron_forge": 3,
+        "mazinger_z_toy": 4,
+        "among_us_purple_teddy": 5,
+        "banana": 6,
+        "kiwi": 7,
+        "lemon": 8,
+        "orange": 9,
+        "green_dark_orange": 10
+    },
+    "class_prompts": {
+        "table": "black table surface or table cloth",
+        "colors_panel": "color calibration chart or color checker panel",
+        "iron_forge": "vintage clothes iron or cast iron",
+        "mazinger_z_toy": "Mazinger Z robot toy figure",
+        "among_us_purple_teddy": "purple Among Us plush toy",
+        "banana": "banana fruit on the table",
+        "kiwi": "kiwi fruit on the table",
+        "lemon": "lemon fruit on the table",
+        "orange": "orange fruit on the table",
+        "green_dark_orange": "green or dark orange fruit on the table"
+    },
+    "class_colors": {
+        "background": [
+            0,
+            0,
+            0
+        ],
+        "table": [
+            70,
+            70,
+            70
+        ],
+        "colors_panel": [
+            0,
+            255,
+            255
+        ],
+        "iron_forge": [
+            120,
+            60,
+            20
+        ],
+        "mazinger_z_toy": [
+            0,
+            128,
+            255
+        ],
+        "among_us_purple_teddy": [
+            160,
+            32,
+            240
+        ],
+        "banana": [
+            255,
+            230,
+            40
+        ],
+        "kiwi": [
+            0,
+            170,
+            60
+        ],
+        "lemon": [
+            255,
+            250,
+            80
+        ],
+        "orange": [
+            255,
+            125,
+            0
+        ],
+        "green_dark_orange": [
+            110,
+            130,
+            0
+        ]
+    },
+    "merge_order": [
+        "table",
+        "colors_panel",
+        "iron_forge",
+        "mazinger_z_toy",
+        "among_us_purple_teddy",
+        "banana",
+        "kiwi",
+        "lemon",
+        "orange",
+        "green_dark_orange"
+    ],
+    "track_classes": [
+        "colors_panel",
+        "iron_forge",
+        "mazinger_z_toy",
+        "among_us_purple_teddy",
+        "banana",
+        "kiwi",
+        "lemon",
+        "orange",
+        "green_dark_orange"
+    ]
+}

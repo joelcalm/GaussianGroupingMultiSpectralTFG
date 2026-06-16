@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--max_overlay_frames", type=int, default=12)
-    parser.add_argument("--config_out", type=Path, default=Path("config/gaussian_dataset/vinyes_sam3_200.json"))
+    parser.add_argument("--config_out", type=Path, default=Path("config/gaussian_dataset/vines_20260321_rgb_ms.json"))
     return parser.parse_args()
 
 
@@ -566,16 +566,16 @@ def main() -> None:
     )
 
     config = {
-        "densify_until_iter": 6000,
+        "densify_until_iter": 10000,
         "densify_grad_threshold": 0.00005,
         "num_classes": num_classes,
         "num_objects": 16,
-        "max_num_points": 1000000,
+        "max_num_points": 1500000,
         "reg3d_interval": 5,
         "reg3d_k": 5,
         "reg3d_lambda_val": 2,
-        "reg3d_max_points": 150000,
-        "reg3d_sample_size": 500,
+        "reg3d_max_points": 200000,
+        "reg3d_sample_size": 1000,
         "use_color_embed": True,
         "color_embed_dim": 32,
         "color_decoder_hidden_dim": 128,

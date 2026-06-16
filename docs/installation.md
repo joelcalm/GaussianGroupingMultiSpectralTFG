@@ -57,8 +57,8 @@ python sam3_vine_video.py --help
 
 Keep SAM3 in a separate environment if its PyTorch/CUDA requirements conflict with the Python 3.8 Gaussian-training environment.
 
-## Optional Upstream Components
+## Optional Components
 
-`Tracking-Anything-with-DEVA/` and `lama/` are retained from Gaussian Grouping for baseline mask tracking and editing compatibility. They are not required for the main SAM3 vineyard experiments.
+The main vineyard experiments use SAM3 masks and do not require the older DEVA tracking or LAMA editing components inherited from Gaussian Grouping.
 
 Poisson canopy reconstruction additionally requires `open3d`; install a version compatible with the active Python environment only when that estimator is needed.

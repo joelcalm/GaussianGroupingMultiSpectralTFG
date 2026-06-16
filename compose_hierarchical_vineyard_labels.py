@@ -35,15 +35,15 @@ DEFAULT_SEMANTIC_ORDER = [
 ]
 
 TRAIN_CONFIG_DEFAULTS = {
-    "densify_until_iter": 6000,
+    "densify_until_iter": 10000,
     "densify_grad_threshold": 0.00005,
     "num_objects": 16,
-    "max_num_points": 1000000,
+    "max_num_points": 1500000,
     "reg3d_interval": 5,
     "reg3d_k": 5,
     "reg3d_lambda_val": 2,
-    "reg3d_max_points": 150000,
-    "reg3d_sample_size": 500,
+    "reg3d_max_points": 200000,
+    "reg3d_sample_size": 1000,
     "use_color_embed": True,
     "color_embed_dim": 32,
     "color_decoder_hidden_dim": 128,

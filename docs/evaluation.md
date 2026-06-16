@@ -4,7 +4,7 @@
 
 ```bash
 python render.py \
-  -m output/vinyes_20260509_pinhole_rgb_ms \
+  -m output/vines_20260509_object_rgb_ms \
   --iteration 30000 \
   --skip_train \
   --only_prefix rgb
@@ -15,7 +15,7 @@ Useful filters are `--only_prefix`, `--max_train_views`, and `--max_test_views`.
 ## Reconstruction Metrics
 
 ```bash
-python metrics.py -m output/vinyes_20260509_pinhole_rgb_ms
+python metrics.py -m output/vines_20260509_object_rgb_ms
 ```
 
 The evaluator reports PSNR, SSIM, and LPIPS. For multispectral data, metrics are evaluated on active channels and can be aggregated per channel.
@@ -23,18 +23,21 @@ The evaluator reports PSNR, SSIM, and LPIPS. For multispectral data, metrics are
 Evaluate only object predictions without loading LPIPS:
 
 ```bash
-python metrics.py -m output/vinyes_20260509_pinhole_rgb_ms --object_only
+python metrics.py -m output/vines_20260509_object_rgb_ms --object_only
 ```
 
 ## Corrected-Mask Object Evaluation
 
-The report's RGB/MS comparison evaluates four models on 15 held-out corrected RGB frames. The historical end-to-end wrapper is:
+The report's RGB/MS comparison evaluates four models on 15 held-out corrected RGB frames. Train the four runs with:
 
 ```bash
-bash script/run_vinyes_20260509_pinhole_hybrid_4experiments.sh
+bash script/train.sh vines_20260509_object_no_color
+bash script/train.sh vines_20260509_object_rgb
+bash script/train.sh vines_20260509_object_ms
+bash script/train.sh vines_20260509_object_rgb_ms
 ```
 
-It trains `no_color`, `rgb`, `ms`, and `rgb_ms`, renders RGB test views, and calls `tools/eval/evaluate_final15_object_ids.py` for instance-level and class-level mIoU and Dice/F1. Review the wrapper's scene paths and `DEVICE`, `ITERATIONS`, and `RESOLUTION` variables before running it.
+After rendering the held-out views, use `tools/eval/evaluate_final15_object_ids.py` for instance-level and class-level mIoU and Dice/F1.
 
 ## Plant-Level Measurements
 

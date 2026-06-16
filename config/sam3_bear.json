@@ -1,0 +1,88 @@
+{
+    "class_map": {
+        "background": 0,
+        "bear_statue": 1,
+        "tree_trunk": 2,
+        "tree_canopy": 3,
+        "ground_soil": 4,
+        "stone_platform": 5,
+        "low_green_plants": 6,
+        "bush_or_hedge": 7,
+        "fallen_branch_or_root": 8,
+        "wood_board": 9
+    },
+    "class_prompts": {
+        "bear_statue": "gray stone bear statue or bear sculpture on a stone base; exclude trees, ground, plants, and platform",
+        "tree_trunk": "large tree trunk or woody tree bark; exclude bear statue, branches on the ground, and green leaves",
+        "tree_canopy": "tree leaves and green tree canopy above or behind the scene; exclude low plants, bushes, ground, and bear statue",
+        "ground_soil": "bare dirt soil, mulch, gravel, or forest floor ground; exclude stone platform, bear statue, plants, and tree trunks",
+        "stone_platform": "flat stone slab, concrete base, rock platform, or paved stone surface under or around the bear statue; exclude bear statue",
+        "low_green_plants": "small green plants, ivy, weeds, grass, or groundcover near the ground; exclude tree canopy and bushes",
+        "bush_or_hedge": "dense bush, hedge, shrub, or background vegetation; exclude tree trunks, bear statue, and groundcover",
+        "fallen_branch_or_root": "fallen branch, exposed root, stick, or dead wood lying on the ground",
+        "wood_board": "flat wooden board or plank lying on the ground"
+    },
+    "class_colors": {
+        "background": [
+            0,
+            0,
+            0
+        ],
+        "bear_statue": [
+            210,
+            210,
+            205
+        ],
+        "tree_trunk": [
+            112,
+            70,
+            42
+        ],
+        "tree_canopy": [
+            42,
+            132,
+            76
+        ],
+        "ground_soil": [
+            150,
+            118,
+            82
+        ],
+        "stone_platform": [
+            135,
+            138,
+            128
+        ],
+        "low_green_plants": [
+            80,
+            190,
+            65
+        ],
+        "bush_or_hedge": [
+            30,
+            105,
+            52
+        ],
+        "fallen_branch_or_root": [
+            122,
+            86,
+            50
+        ],
+        "wood_board": [
+            166,
+            112,
+            70
+        ]
+    },
+    "merge_order": [
+        "ground_soil",
+        "tree_canopy",
+        "low_green_plants",
+        "bush_or_hedge",
+        "stone_platform",
+        "fallen_branch_or_root",
+        "wood_board",
+        "tree_trunk",
+        "bear_statue"
+    ]
+}
