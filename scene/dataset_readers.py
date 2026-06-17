@@ -150,10 +150,14 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_fol
             active_channels = _infer_active_channels(image_name)
 
         ms_path = None
+        ms_candidates = []
         if multispectral_folder is not None:
-            ms_candidate = os.path.join(multispectral_folder, image_name + '.npy')
+            ms_candidates.append(os.path.join(multispectral_folder, image_name + '.npy'))
+        ms_candidates.append(os.path.join(images_folder, image_name + '.npy'))
+        for ms_candidate in ms_candidates:
             if os.path.exists(ms_candidate):
                 ms_path = ms_candidate
+                break
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                               image_path=image_path, image_name=image_name, width=width, height=height,

@@ -149,7 +149,15 @@ def _expand_active_channels(image_tensor, active_channels, num_channels):
 
 
 def loadCam(args, id, cam_info, resolution_scale, **kwargs):
-    orig_w, orig_h = cam_info.image.size
+    ms_path = getattr(cam_info, 'multispectral_path', None)
+    ms_array = None
+    if cam_info.image is not None:
+        orig_w, orig_h = cam_info.image.size
+    elif ms_path is not None:
+        ms_array = np.load(ms_path)  # [H, W, C] float32 in [0, 1]
+        orig_h, orig_w = ms_array.shape[:2]
+    else:
+        raise ValueError(f"Camera {cam_info.image_name} has neither an RGB image nor a multispectral array")
 
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
@@ -170,11 +178,11 @@ def loadCam(args, id, cam_info, resolution_scale, **kwargs):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    ms_path = getattr(cam_info, 'multispectral_path', None)
     active_channels = getattr(cam_info, 'active_channels', None)
     num_channels = int(getattr(args, 'num_channels', 3))
     if ms_path is not None:
-        ms_array = np.load(ms_path)  # [H, W, C] float32 in [0, 1]
+        if ms_array is None:
+            ms_array = np.load(ms_path)  # [H, W, C] float32 in [0, 1]
         ms_array = _resize_multispectral(ms_array, resolution)
         gt_image = torch.from_numpy(ms_array).permute(2, 0, 1).float()  # [C, H, W]
         gt_image, active_channels = _expand_active_channels(gt_image, active_channels, num_channels)

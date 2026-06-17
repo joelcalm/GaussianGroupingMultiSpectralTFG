@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")"
 
 usage() {
   cat <<'USAGE'
-Usage: bash script/train.sh <run> [extra train.py args]
+Usage: bash train.sh <run> [extra train.py args]
 
 Runs:
   bear_rgb
@@ -69,49 +69,49 @@ case "$RUN" in
     RESOLUTION_DEFAULT="2"
     ;;
   vines_20260321_rgb_ms)
-    DEFAULT_SCENE="data/vines_20260321"
+    DEFAULT_SCENE="data/vinyes_20260321"
     DEFAULT_MODEL="output/vines_20260321_rgb_ms"
     CONFIG="config/gaussian_dataset/vines_20260321_rgb_ms.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260418_rgb_ms)
-    DEFAULT_SCENE="data/vines_20260418"
+    DEFAULT_SCENE="data/vinyes_20260418_rgb_colmap_shared"
     DEFAULT_MODEL="output/vines_20260418_rgb_ms"
     CONFIG="config/gaussian_dataset/vines_20260418_rgb_ms.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260509_rgb_ms)
-    DEFAULT_SCENE="data/vines_20260509"
+    DEFAULT_SCENE="data/vinyes_20260509"
     DEFAULT_MODEL="output/vines_20260509_rgb_ms"
     CONFIG="config/gaussian_dataset/vines_20260509_rgb_ms.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260509_object_no_color)
-    DEFAULT_SCENE="data/vines_20260509"
+    DEFAULT_SCENE="data/vinyes_20260509"
     DEFAULT_MODEL="output/vines_20260509_object_no_color"
     CONFIG="config/gaussian_dataset/vines_20260509_object_no_color.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260509_object_rgb)
-    DEFAULT_SCENE="data/vines_20260509"
+    DEFAULT_SCENE="data/vinyes_20260509"
     DEFAULT_MODEL="output/vines_20260509_object_rgb"
     CONFIG="config/gaussian_dataset/vines_20260509_object_rgb.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260509_object_ms)
-    DEFAULT_SCENE="data/vines_20260509"
+    DEFAULT_SCENE="data/vinyes_20260509"
     DEFAULT_MODEL="output/vines_20260509_object_ms"
     CONFIG="config/gaussian_dataset/vines_20260509_object_ms.json"
     RESOLUTION_DEFAULT="4"
     EXTRA_ARGS+=(--train_split)
     ;;
   vines_20260509_object_rgb_ms)
-    DEFAULT_SCENE="data/vines_20260509"
+    DEFAULT_SCENE="data/vinyes_20260509"
     DEFAULT_MODEL="output/vines_20260509_object_rgb_ms"
     CONFIG="config/gaussian_dataset/vines_20260509_object_rgb_ms.json"
     RESOLUTION_DEFAULT="4"

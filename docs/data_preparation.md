@@ -53,7 +53,7 @@ The prepared scene should contain `images/`, `object_mask/`, and `sparse/0/`.
 
 The Basement dataset was provided by **Arnau Marcos Almansa**. It contains complete nine-channel observations at shared camera poses and is used as the controlled multispectral validation scene.
 
-Place the prepared COLMAP-style Basement scene at `data/basement` for the documented commands, or substitute its actual path with `SCENE_DIR=/path/to/basement` when invoking `script/train.sh`.
+Place the prepared COLMAP-style Basement scene at `data/basement` for the documented commands, or substitute its actual path with `SCENE_DIR=/path/to/basement` when invoking `train.sh`.
 
 ## Vineyard Scenes
 
@@ -75,7 +75,7 @@ python prepare_vineyard_video_colmap.py --help
 python compose_hierarchical_vineyard_labels.py --help
 ```
 
-Use `script/train.sh` for the reported training runs. Prefer the Python entry points and portable commands documented here when adapting the preparation pipeline to another dataset.
+Use `train.sh` for the reported training runs. Prefer the Python entry points and portable commands documented here when adapting the preparation pipeline to another dataset.
 
 ## Train/Test Split
 

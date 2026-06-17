@@ -31,10 +31,10 @@ python metrics.py -m output/vines_20260509_object_rgb_ms --object_only
 The report's RGB/MS comparison evaluates four models on 15 held-out corrected RGB frames. Train the four runs with:
 
 ```bash
-bash script/train.sh vines_20260509_object_no_color
-bash script/train.sh vines_20260509_object_rgb
-bash script/train.sh vines_20260509_object_ms
-bash script/train.sh vines_20260509_object_rgb_ms
+bash train.sh vines_20260509_object_no_color
+bash train.sh vines_20260509_object_rgb
+bash train.sh vines_20260509_object_ms
+bash train.sh vines_20260509_object_rgb_ms
 ```
 
 After rendering the held-out views, use `tools/eval/evaluate_final15_object_ids.py` for instance-level and class-level mIoU and Dice/F1.
@@ -44,10 +44,10 @@ After rendering the held-out views, use `tools/eval/evaluate_final15_object_ids.
 The geometry entry points are:
 
 ```bash
-python script/scene_scale_metrics.py --help
-python script/gaussian_volume_metrics.py --help
-python script/gaussian_volume_threshold_sweep.py --help
-python script/classifier_leaf_surface_metrics.py --help
+python tools/eval/scene_scale_metrics.py --help
+python tools/eval/gaussian_volume_metrics.py --help
+python tools/eval/gaussian_volume_threshold_sweep.py --help
+python tools/eval/classifier_leaf_surface_metrics.py --help
 ```
 
 The workflow is:

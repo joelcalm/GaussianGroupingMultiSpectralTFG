@@ -10,6 +10,7 @@
     "reg3d_sample_size": 500,
     "use_color_embed": true,
     "color_embed_dim": 16,
-    "num_channels": 3,
-    "single_channel_mode": true
+    "num_channels": 10,
+    "single_channel_mode": true,
+    "photometric_channels": "0,1,2"
 }

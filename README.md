@@ -28,7 +28,7 @@ Each Gaussian stores geometry, opacity, a learned appearance embedding, and an o
 
 During training, the photometric loss is evaluated only on the channels available for the current view. RGB images supervise the RGB channels, while each narrow-band image supervises only its corresponding spectral band. This makes it possible to train a single 3D Gaussian scene from separately acquired RGB and multispectral sequences.
 
-The vineyard model predicts ten appearance channels:
+The renderer is compiled for ten appearance channels; RGB-only or 9-band datasets train only the channels listed in their config. Vineyard RGB+MS runs use all ten channels:
 
 ```text
 R, G, B, 470, 505, 525, 590, 635, 660, 850 nm
@@ -84,7 +84,7 @@ See [installation](docs/installation.md) for CUDA-extension, COLMAP, and SAM 3 s
 Download Bear from the [Gaussian Grouping data repository](https://huggingface.co/mqye/Gaussian-Grouping/tree/main/data), place it at `data/bear`, then run:
 
 ```bash
-bash script/train.sh bear_rgb
+bash train.sh bear_rgb
 ```
 
 ### Basement multispectral
@@ -92,7 +92,7 @@ bash script/train.sh bear_rgb
 After preparing the scene at `data/basement`:
 
 ```bash
-bash script/train.sh basement_all9
+bash train.sh basement_all9
 ```
 
 The Basement dataset was provided by **Arnau Marcos Almansa**.
@@ -102,7 +102,7 @@ The Basement dataset was provided by **Arnau Marcos Almansa**.
 After preparing the vineyard scene and its camera/mask metadata:
 
 ```bash
-bash script/train.sh vines_20260509_rgb_ms
+bash train.sh vines_20260509_rgb_ms
 ```
 
 The vineyard scenes were captured and provided by **Felipe Lumbreras Ruiz** in the context of the VINIA project.
@@ -135,14 +135,17 @@ Both `data/` and `output/` are intentionally ignored by Git.
 ## Repository Structure
 
 ```text
-|-- train.py, render.py, metrics.py     Core training, rendering, and evaluation entry points
+|-- train.py, render.py, metrics.py     Core training, rendering, and reconstruction evaluation
+|-- train.sh                            Named wrapper for the reported experiments
+|-- prepare_vineyard_video_colmap.py    Vineyard frame extraction and COLMAP preparation
+|-- sam3_vine_video.py                  SAM 3 mask generation for ordered image sequences
+|-- compose_hierarchical_vineyard_labels.py  SAM 3 mask conversion into training labels
 |-- scene/                              Cameras, COLMAP readers, and Gaussian model definitions
 |-- gaussian_renderer/                  Differentiable Gaussian renderer integration
 |-- arguments/ and utils/               Configuration, losses, and shared utilities
-|-- config/                             Training, SAM 3, and experiment configurations
-|-- script/                             Reproducible training and experiment wrappers
-|-- tools/                              Evaluation, mask-processing, and temporal utilities
-|-- docs/                               User documentation and research notes
+|-- config/                             Training and SAM 3 prompt configurations
+|-- tools/eval/                         Object, scale, volume, and canopy evaluation helpers
+|-- docs/                               User documentation
 |-- submodules/                         CUDA rasterizer and nearest-neighbor extensions
 |-- data/                               Local datasets, ignored by Git
 |-- output/                             Trained models and rendered results, ignored by Git
