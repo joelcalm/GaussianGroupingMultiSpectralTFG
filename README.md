@@ -126,6 +126,7 @@ Both `data/` and `output/` are intentionally ignored by Git.
 
 ## Documentation
 
+- [Final TFG report](docs/TFG_JoelCalm.pdf)
 - [Installation](docs/installation.md)
 - [Data preparation](docs/data_preparation.md)
 - [Training](docs/training.md)
